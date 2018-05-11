@@ -493,36 +493,55 @@ void __oom_reap_task_mm(struct mm_struct *mm)
 		 * count elevated without a good reason.
 		 */
 		if (vma_is_anonymous(vma) || !(vma->vm_flags & VM_SHARED)) {
+			const unsigned long start = vma->vm_start;
+			const unsigned long end = vma->vm_end;
 			struct mmu_gather tlb;
 
-			tlb_gather_mmu(&tlb, mm, vma->vm_start, vma->vm_end);
-			unmap_page_range(&tlb, vma, vma->vm_start, vma->vm_end,
-					 NULL);
-			tlb_finish_mmu(&tlb, vma->vm_start, vma->vm_end);
+			tlb_gather_mmu(&tlb, mm, start, end);
+			mmu_notifier_invalidate_range_start(mm, start, end);
+			unmap_page_range(&tlb, vma, start, end, NULL);
+			mmu_notifier_invalidate_range_end(mm, start, end);
+			tlb_finish_mmu(&tlb, start, end);
 		}
 	}
 }
 
 static bool oom_reap_task_mm(struct task_struct *tsk, struct mm_struct *mm)
 {
+	bool ret = true;
+
+	/*
+	 * We have to make sure to not race with the victim exit path
+	 * and cause premature new oom victim selection:
+	 * oom_reap_task_mm		exit_mm
+	 *   mmget_not_zero
+	 *				  mmput
+	 *				    atomic_dec_and_test
+	 *				  exit_oom_victim
+	 *				[...]
+	 *				out_of_memory
+	 *				  select_bad_process
+	 *				    # no TIF_MEMDIE task selects new victim
+	 *  unmap_page_range # frees some memory
+	 */
+	mutex_lock(&oom_lock);
+
 	if (!down_read_trylock(&mm->mmap_sem)) {
+		ret = false;
 		trace_skip_task_reaping(tsk->pid);
-		return false;
+		goto unlock_oom;
 	}
 
 	/*
-	 * If the mm has notifiers then we would need to invalidate them around
-	 * unmap_page_range and that is risky because notifiers can sleep and
-	 * what they do is basically undeterministic.  So let's have a short
+	 * If the mm has invalidate_{start,end}() notifiers that could block,
 	 * sleep to give the oom victim some more time.
 	 * TODO: we really want to get rid of this ugly hack and make sure that
-	 * notifiers cannot block for unbounded amount of time and add
-	 * mmu_notifier_invalidate_range_{start,end} around unmap_page_range
+	 * notifiers cannot block for unbounded amount of time
 	 */
-	if (mm_has_notifiers(mm)) {
+	if (mm_has_blockable_invalidate_notifiers(mm)) {
 		up_read(&mm->mmap_sem);
 		schedule_timeout_idle(HZ);
-		return true;
+		goto unlock_oom;
 	}
 
 	/*
@@ -534,14 +553,14 @@ static bool oom_reap_task_mm(struct task_struct *tsk, struct mm_struct *mm)
 	if (test_bit(MMF_OOM_SKIP, &mm->flags)) {
 		up_read(&mm->mmap_sem);
 		trace_skip_task_reaping(tsk->pid);
-		return true;
+		goto unlock_oom;
 	}
 
 	trace_start_task_reaping(tsk->pid);
 
 	__oom_reap_task_mm(mm);
 
-	pr_debug("oom_reaper: reaped process %d (%s), now anon-rss:%lukB, file-rss:%lukB, shmem-rss:%lukB\n",
+	pr_info("oom_reaper: reaped process %d (%s), now anon-rss:%lukB, file-rss:%lukB, shmem-rss:%lukB\n",
 			task_pid_nr(tsk), tsk->comm,
 			K(get_mm_counter(mm, MM_ANONPAGES)),
 			K(get_mm_counter(mm, MM_FILEPAGES)),
