@@ -485,7 +485,7 @@ unsigned long mem_cgroup_get_zone_lru_size(struct lruvec *lruvec,
 
 void mem_cgroup_handle_over_high(void);
 
-unsigned long mem_cgroup_get_limit(struct mem_cgroup *memcg);
+unsigned long mem_cgroup_get_max(struct mem_cgroup *memcg);
 
 void mem_cgroup_print_oom_info(struct mem_cgroup *memcg,
 				struct task_struct *p);
@@ -910,7 +910,7 @@ mem_cgroup_node_nr_lru_pages(struct mem_cgroup *memcg,
 	return 0;
 }
 
-static inline unsigned long mem_cgroup_get_limit(struct mem_cgroup *memcg)
+static inline unsigned long mem_cgroup_get_max(struct mem_cgroup *memcg)
 {
 	return 0;
 }
