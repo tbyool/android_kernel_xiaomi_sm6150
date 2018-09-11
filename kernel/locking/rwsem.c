@@ -1710,7 +1710,7 @@ int down_read_killable_nested(struct rw_semaphore *sem, int subclass)
 	rwsem_acquire_read(&sem->dep_map, subclass, 0, _RET_IP_);
 
 	if (LOCK_CONTENDED_RETURN(sem, __down_read_trylock, __down_read_killable)) {
-		rwsem_release(&sem->dep_map, 1, _RET_IP_);
+		rwsem_release(&sem->dep_map, _RET_IP_);
 		return -EINTR;
 	}
 
