@@ -962,6 +962,8 @@ extern void arch_set_freq_scale(const struct cpumask *cpus,
 				unsigned long max_freq);
 extern void arch_set_max_freq_scale(const struct cpumask *cpus,
 				    unsigned long policy_max_freq);
+extern void arch_set_max_thermal_scale(struct cpumask *cpus,
+					unsigned long max_thermal_freq);
 #ifndef arch_set_min_freq_scale
 static __always_inline
 void arch_set_min_freq_scale(const struct cpumask *cpus,

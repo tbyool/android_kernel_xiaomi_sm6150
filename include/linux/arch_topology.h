@@ -57,11 +57,13 @@ void topology_set_min_freq_scale(const struct cpumask *cpus,
 bool topology_scale_freq_invariant(void);
 
 DECLARE_PER_CPU(unsigned long, max_freq_scale);
+DECLARE_PER_CPU(unsigned long, max_thermal_scale);
 
 static inline
 unsigned long topology_get_max_freq_scale(struct sched_domain *sd, int cpu)
 {
-	return per_cpu(max_freq_scale, cpu);
+		return min(per_cpu(max_freq_scale, cpu),
+		   per_cpu(max_thermal_scale, cpu));
 }
 
 DECLARE_PER_CPU(unsigned long, thermal_pressure);
