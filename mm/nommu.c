@@ -456,6 +456,10 @@ void __weak vmalloc_sync_unmappings(void)
 {
 }
 
+void __weak vmalloc_sync_unmappings(void)
+{
+}
+
 /**
  *	alloc_vm_area - allocate a range of kernel address space
  *	@size:		size of the area
