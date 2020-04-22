@@ -87,7 +87,6 @@ static void msm_fb_output_poll_changed(struct drm_device *dev)
 
 static void msm_drm_display_thread_priority_worker(struct kthread_work *work)
 {
-	int ret = 0;
 	struct task_struct *task = current->group_leader;
 
 	/**
@@ -95,10 +94,7 @@ static void msm_drm_display_thread_priority_worker(struct kthread_work *work)
 	 * realtime scheduling to process display updates and interact with
 	 * other real time and normal priority task
 	 */
-	ret = sched_set_fifo(task);
-	if (ret)
-		pr_warn("pid:%d name:%s priority update failed: %d\n",
-			current->tgid, task->comm, ret);
+	sched_set_fifo(task);
 }
 
 /**
