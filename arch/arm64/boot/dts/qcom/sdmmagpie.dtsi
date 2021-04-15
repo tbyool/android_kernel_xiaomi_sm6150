@@ -634,6 +634,7 @@
 			reg = <0 0xb0000000 0 0x400000>;
 			record-size = <0x00200000>;
 			console-size = <0x00200000>;
+			ecc-size = <0x10>;
 		};
 
 		cdsp_mem: cdsp_region {
