@@ -95,7 +95,7 @@ int cpupri_find(struct cpupri *cp, struct task_struct *p,
 	int task_pri = convert_prio(p->prio);
 	bool drop_nopreempts = task_pri <= MAX_RT_PRIO + 1;
 
-	BUG_ON(task_pri >= CPUPRI_NR_PRIORITIES);
+	WARN_ON_ONCE(task_pri >= CPUPRI_NR_PRIORITIES);
 
 retry:
 	for (idx = 0; idx < task_pri; idx++) {
