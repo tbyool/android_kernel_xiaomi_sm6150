@@ -287,8 +287,8 @@ static void task_non_contending(struct task_struct *p)
 				sub_rq_bw(p->dl.dl_bw, &rq->dl);
 			raw_spin_lock(&dl_b->lock);
 			__dl_clear(dl_b, p->dl.dl_bw, dl_bw_cpus(task_cpu(p)));
-			__dl_clear_params(p);
 			raw_spin_unlock(&dl_b->lock);
+			__dl_clear_params(p);
 		}
 
 		return;
