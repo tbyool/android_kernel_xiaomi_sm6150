@@ -163,7 +163,7 @@ EXPORT_SYMBOL(lpm_sleep_disabled);
  */
 inline s32 msm_cpuidle_get_deep_idle_latency(void)
 {
-	return 100;
+	return 10;
 }
 EXPORT_SYMBOL(msm_cpuidle_get_deep_idle_latency);
 
