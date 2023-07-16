@@ -36,11 +36,6 @@ static inline unsigned long map_util_freq(unsigned long util,
 	return (freq + (freq >> 2)) * util / cap;
 }
 
-static inline unsigned long map_util_perf(unsigned long util)
-{
-	return util + (util >> 2);
-}
-
 /* Exported helpers for external cpufreq governors (e.g. loadable modules) */
 unsigned long cpufreq_get_capacity_ref_freq(struct cpufreq_policy *policy);
 unsigned long sugov_effective_cpu_perf(int cpu, unsigned long actual,
