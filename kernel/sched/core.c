@@ -829,7 +829,7 @@ DEFINE_STATIC_KEY_FALSE(sched_uclamp_used);
 
 static inline unsigned int uclamp_bucket_id(unsigned int clamp_value)
 {
-	return min_t(unsigned int, clamp_value / UCLAMP_BUCKET_DELTA, UCLAMP_BUCKETS - 1);
+	return clamp_value / UCLAMP_BUCKET_DELTA;
 }
 
 static inline enum uclamp_id uclamp_none(enum uclamp_id clamp_id)
