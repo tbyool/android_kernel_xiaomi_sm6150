@@ -767,6 +767,8 @@ KBUILD_CFLAGS	+= -mcpu=cortex-a76+crc+crypto -march=armv8.2-a+lse+fp16+dotprod
 endif
 ifeq ($(cc-name),clang)
 KBUILD_CFLAGS	+= -mcpu=cortex-a76+crc+crypto -march=armv8.2-a+lse+fp16+dotprod
+# Enable hot cold split optimization
+KBUILD_CFLAGS  += -mllvm -hot-cold-split=true
 endif
 else ifdef CONFIG_CC_OPTIMIZE_FOR_SIZE
 KBUILD_CFLAGS   += -Os
