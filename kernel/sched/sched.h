@@ -369,6 +369,7 @@ extern int dl_cpuset_cpumask_can_shrink(const struct cpumask *cur,
 					const struct cpumask *trial);
 extern bool dl_cpu_busy(unsigned int cpu);
 unsigned long approximate_util_avg(unsigned long util, u64 delta);
+u64 approximate_runtime(unsigned long util);
 
 #ifdef CONFIG_CGROUP_SCHED
 
