@@ -368,6 +368,7 @@ extern int dl_task_can_attach(struct task_struct *p,
 extern int dl_cpuset_cpumask_can_shrink(const struct cpumask *cur,
 					const struct cpumask *trial);
 extern bool dl_cpu_busy(unsigned int cpu);
+unsigned long approximate_util_avg(unsigned long util, u64 delta);
 
 #ifdef CONFIG_CGROUP_SCHED
 
