@@ -78,7 +78,8 @@ static void thermal_throttle_worker(struct work_struct *work)
 		rc = thermal_zone_get_temp(thermal_zone_get_zone_by_name(zone_name), &temp);
 		if (!rc)
 			temp_total += temp;
-		else break;
+		else
+			break;
 	}
 
 	temp_cpus_avg = temp_total / i;
@@ -101,7 +102,7 @@ static void thermal_throttle_worker(struct work_struct *work)
 		temp_avg = (temp_cpus_avg * 5 + temp_batt) / 6;
 
 	/* Emergency case */
-	if (temp_cpus_avg > 75000 || temp_batt > 45000)
+	if (temp_cpus_avg >= 75000 || temp_batt >= 40000)
 		temp_avg = temp_cpus_avg;
 
 	old_zone = t->curr_zone;
