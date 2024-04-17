@@ -74,7 +74,8 @@ static void thermal_throttle_worker(struct work_struct *work)
 	/* Store average temperature of all CPU cores */
 	for (i = 0; i < NR_CPUS; i++) {
 		char zone_name[15];
-		sprintf(zone_name, "cpu-1-%i-usr", i);
+		sprintf(zone_name, "cpu-0-%i-usr", i); /* Silver */
+		sprintf(zone_name, "cpu-1-%i-usr", i); /* Gold */
 		rc = thermal_zone_get_temp(thermal_zone_get_zone_by_name(zone_name), &temp);
 		if (!rc)
 			temp_total += temp;
@@ -87,19 +88,13 @@ static void thermal_throttle_worker(struct work_struct *work)
 	/* Now let's also get battery temperature */
 	thermal_zone_get_temp(thermal_zone_get_zone_by_name("battery"), &temp_batt);
 
-	/* HQ autism coming up */
-	if (temp_batt <= 24000)
-		/* Battery is cool-ish, bias the temp towards it */
-		temp_avg = (temp_cpus_avg * 2 + temp_batt * 3) / 5;
-	else if (temp_batt > 24000 && temp_batt <= 28000)
-		/* Getting warmer, start biasing towards CPU temps */
-		temp_avg = (temp_cpus_avg * 3 + temp_batt * 2) / 5;
-	else if (temp_batt > 28000 && temp_batt <= 32000)
-		/* Getting even warmer, go even more towards CPU temps */
-		temp_avg = (temp_cpus_avg * 4 + temp_batt) / 5;
-	else if (temp_batt > 32000)
-		/* Battery is hot, go for CPU temps */
-		temp_avg = (temp_cpus_avg * 5 + temp_batt) / 6;
+	/*
+	 * Average the (average) temperature of the CPUs
+	 * With the (current) battery temperature.
+	 *
+	 * This ensures they are treated equally.
+	 */
+	temp_avg = (temp_cpus_avg + temp_batt) / 2;
 
 	/* Emergency case */
 	if (temp_cpus_avg >= 75000 || temp_batt >= 40000)
