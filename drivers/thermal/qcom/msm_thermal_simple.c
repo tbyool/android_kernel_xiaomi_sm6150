@@ -83,6 +83,7 @@ static void thermal_throttle_worker(struct work_struct *work)
 			break;
 	}
 
+	/* Calculate the average temperature of all CPUs */
 	temp_cpus_avg = temp_total / i;
 
 	/* Now let's also get battery temperature */
@@ -96,13 +97,22 @@ static void thermal_throttle_worker(struct work_struct *work)
 	 */
 	temp_avg = (temp_cpus_avg + temp_batt) / 2;
 
+	/* Bail out earlier if cool enough */
+	if (temp_avg <= 38000)
+		goto done;
+
 	/* Emergency case */
 	if (temp_cpus_avg >= 75000 || temp_batt >= 40000)
 		temp_avg = temp_cpus_avg;
 
+	/* Log the current statistics */
+	pr_info_ratelimited("temp_avg: %i, batt: %i, cpus: %i\n",
+			temp_avg, temp_batt, temp_cpus_avg);
+
 	old_zone = t->curr_zone;
 	new_zone = NULL;
 
+	/* Go through all configured thermal zones */
 	for (i = t->nr_zones - 1; i >= 0; i--) {
 		if (temp_avg >= t->zones[i].trip_deg) {
 			new_zone = t->zones + i;
@@ -112,9 +122,13 @@ static void thermal_throttle_worker(struct work_struct *work)
 
 	/* Update thermal zone if it changed */
 	if (new_zone != old_zone) {
-		pr_info("temp_avg: %i, batt: %i, cpus: %i\n", temp_avg, temp_batt, temp_cpus_avg);
+		pr_info("throttling!\n");
 		t->curr_zone = new_zone;
 	}
+
+	goto done;
+
+done:
 	update_online_cpu_policy();
 
 	if (throttle_enabled)
