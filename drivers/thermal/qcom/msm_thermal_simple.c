@@ -75,7 +75,6 @@ static void thermal_throttle_worker(struct work_struct *work)
 	for (i = 0; i < NR_CPUS; i++) {
 		char zone_name[15];
 		sprintf(zone_name, "cpu-0-%i-usr", i); /* Silver */
-		sprintf(zone_name, "cpu-1-%i-usr", i); /* Gold */
 		rc = thermal_zone_get_temp(thermal_zone_get_zone_by_name(zone_name), &temp);
 		if (!rc)
 			temp_total += temp;
@@ -122,7 +121,7 @@ static void thermal_throttle_worker(struct work_struct *work)
 
 	/* Update thermal zone if it changed */
 	if (new_zone != old_zone) {
-		pr_info("throttling!\n");
+		pr_info_ratelimited("throttling!\n");
 		t->curr_zone = new_zone;
 	}
 
