@@ -12,6 +12,7 @@
 #include <linux/platform_device.h>
 #include <linux/slab.h>
 #include <linux/thermal.h>
+#include <linux/sysfs.h>
 
 #define OF_READ_U32(node, prop, dst)						\
 ({										\
@@ -38,6 +39,9 @@ struct thermal_drv {
 	u32 nr_zones;
 };
 
+static bool throttle_enabled = true; // Default: thermal throttling enabled
+static struct thermal_drv *thermal_drv_instance;
+
 static void update_online_cpu_policy(void)
 {
 	unsigned int cpu;
@@ -62,6 +66,10 @@ static void thermal_throttle_worker(struct work_struct *work)
 	int temp = 0, temp_cpus_avg = 0, temp_batt = 0, rc;
 	s64 temp_total = 0, temp_avg = 0;
 	short i = 0;
+
+	/* Return if thermal throttling disabled */
+	if (!throttle_enabled)
+		return;
 
 	/* Store average temperature of all CPU cores */
 	for (i = 0; i < NR_CPUS; i++) {
@@ -113,7 +121,8 @@ static void thermal_throttle_worker(struct work_struct *work)
 	}
 	update_online_cpu_policy();
 
-	queue_delayed_work(t->wq, &t->throttle_work, t->poll_jiffies);
+	if (throttle_enabled)
+		queue_delayed_work(t->wq, &t->throttle_work, t->poll_jiffies);
 }
 
 static u32 get_throttle_freq(struct thermal_zone *zone, u32 cpu)
@@ -135,7 +144,8 @@ static int cpu_notifier_cb(struct notifier_block *nb, unsigned long val,
 		return NOTIFY_OK;
 
 	zone = t->curr_zone;
-	if (zone) {
+
+	if (zone && throttle_enabled) {
 		u32 target_freq = get_throttle_freq(zone, policy->cpu);
 
 		if (target_freq < policy->max)
@@ -209,6 +219,63 @@ free_zones:
 	return ret;
 }
 
+static ssize_t throttle_enabled_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
+{
+	return scnprintf(buf, PAGE_SIZE, "%d\n", throttle_enabled);
+}
+
+static ssize_t throttle_enabled_store(struct kobject *kobj, struct kobj_attribute *attr, const char *buf, size_t count)
+{
+	struct thermal_drv *t = thermal_drv_instance;
+	bool new_state;
+	int ret;
+
+	ret = kstrtobool(buf, &new_state);
+	if (ret)
+		return ret;
+
+	if (new_state == throttle_enabled)
+		return count;
+
+	throttle_enabled = new_state;
+	pr_info("Thermal throttling %s\n", throttle_enabled ? "enabled" : "disabled");
+
+	if (!t)
+		return count;
+
+	if (throttle_enabled) {
+		t->curr_zone = NULL;
+		queue_delayed_work(t->wq, &t->throttle_work, 0);
+	} else {
+		cancel_delayed_work_sync(&t->throttle_work);
+		t->curr_zone = NULL;
+		update_online_cpu_policy();
+	}
+
+	return count;
+}
+
+static struct kobj_attribute throttle_enabled_attr = __ATTR(throttle_enabled, 0644, throttle_enabled_show, throttle_enabled_store);
+
+static struct kobject *thermal_kobj;
+
+static int create_sysfs_interface(void)
+{
+	int ret;
+
+	thermal_kobj = kobject_create_and_add("msm_thermal_simple", kernel_kobj);
+	if (!thermal_kobj)
+		return -ENOMEM;
+
+	ret = sysfs_create_file(thermal_kobj, &throttle_enabled_attr.attr);
+	if (ret) {
+		kobject_put(thermal_kobj);
+		return ret;
+	}
+
+	return 0;
+}
+
 static int msm_thermal_simple_probe(struct platform_device *pdev)
 {
 	struct thermal_drv *t;
@@ -238,12 +305,26 @@ static int msm_thermal_simple_probe(struct platform_device *pdev)
 		goto free_zones;
 	}
 
-	/* Fire up the persistent worker */
+	/* Initialize delayed work */
 	INIT_DELAYED_WORK(&t->throttle_work, thermal_throttle_worker);
+
+	thermal_drv_instance = t;
+
+	/* Initialize sysfs thermal throttling switch */
+	ret = create_sysfs_interface();
+	if (ret) {
+		pr_err("Failed to create sysfs interface, err: %d\n", ret);
+		thermal_drv_instance = NULL;
+		goto cpufreq_unregister;
+	}
+
+	/* Fire up the persistent worker */
 	queue_delayed_work(t->wq, &t->throttle_work, t->start_delay * HZ);
 
 	return 0;
 
+cpufreq_unregister:
+	cpufreq_unregister_notifier(&t->cpu_notif, CPUFREQ_POLICY_NOTIFIER);
 free_zones:
 	kfree(t->zones);
 destroy_wq:
