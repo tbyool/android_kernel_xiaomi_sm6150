@@ -1,0 +1,21 @@
+diff --git a/arch/arm64/configs/sweet_defconfig b/arch/arm64/configs/sweet_defconfig
+index 857e712c3082..7fe62510c3b7 100644
+--- a/arch/arm64/configs/sweet_defconfig
++++ b/arch/arm64/configs/sweet_defconfig
+@@ -281,13 +280,11 @@ CONFIG_CC_STACKPROTECTOR=y
+ # CONFIG_CC_STACKPROTECTOR_REGULAR is not set
+ CONFIG_CC_STACKPROTECTOR_STRONG=y
+ CONFIG_THIN_ARCHIVES=y
+-CONFIG_LTO=y
++# CONFIG_LTO is not set
+ CONFIG_ARCH_SUPPORTS_LTO_CLANG=y
+ CONFIG_ARCH_SUPPORTS_THINLTO=y
+-# CONFIG_THINLTO is not set
+-# CONFIG_LTO_NONE is not set
+-CONFIG_LTO_CLANG=y
+-# CONFIG_CFI_CLANG is not set
++CONFIG_LTO_NONE=y
++# CONFIG_LTO_CLANG is not set
+ CONFIG_ARCH_SUPPORTS_SHADOW_CALL_STACK=y
+ CONFIG_ROP_PROTECTION_NONE=y
+ # CONFIG_SHADOW_CALL_STACK is not set
