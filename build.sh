@@ -51,10 +51,10 @@ fi
 export PATH="$PWD/clang/bin/:$PATH"
 export KBUILD_COMPILER_STRING="$($PWD/clang/bin/clang --version | head -n 1 | perl -pe 's/\(http.*?\)//gs' | sed -e 's/  */ /g' -e 's/[[:space:]]*$//')"
 
-if [ "$local" = true ]; then
-	echo -e "\nLocal build, disabling LTO...\n"
-	patch -p1 < local-build.patch
-fi
+#if [ "$local" = true ]; then
+#	echo -e "\nLocal build, disabling LTO...\n"
+#	patch -p1 < local-build.patch
+#fi
 
 if [ "$clean" = true ]; then
 	rm -rf out
