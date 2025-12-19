@@ -38,7 +38,6 @@ else
 	ZIPNAME="[AOSP]-Spiteful-sweet-$(date '+%Y%m%d').zip"
 fi
 
-export ARCH=arm64
 export KBUILD_BUILD_USER=vbajs
 export KBUILD_BUILD_HOST=tbyool
 
@@ -49,7 +48,8 @@ else
 fi
 
 export PATH="$PWD/clang/bin/:$PATH"
-export KBUILD_COMPILER_STRING="$($PWD/clang/bin/clang --version | head -n 1 | perl -pe 's/\(http.*?\)//gs' | sed -e 's/  */ /g' -e 's/[[:space:]]*$//')"
+export CROSS_COMPILE=aarch64-linux-gnu-
+export CROSS_COMPILE_COMPAT=arm-linux-gnueabi-
 
 #if [ "$local" = true ]; then
 #	echo -e "\nLocal build, disabling LTO...\n"
@@ -68,8 +68,12 @@ make -j$(nproc --all) \
     ARCH=arm64 \
     LLVM=1 \
     LLVM_IAS=1 \
-    CROSS_COMPILE=aarch64-linux-gnu- \
-    CROSS_COMPILE_COMPAT=arm-linux-gnueabi-
+    LD=ld.lld \
+    AR=llvm-ar \
+    NM=llvm-nm \
+    OBJCOPY=llvm-objcopy \
+    OBJDUMP=llvm-objdump \
+    STRIP=llvm-strip
 
 kernel="out/arch/arm64/boot/Image.gz"
 dtbo="out/arch/arm64/boot/dtbo.img"
@@ -128,8 +132,12 @@ make -j$(nproc --all) \
     ARCH=arm64 \
     LLVM=1 \
     LLVM_IAS=1 \
-    CROSS_COMPILE=aarch64-linux-gnu- \
-    CROSS_COMPILE_COMPAT=arm-linux-gnueabi
+    LD=ld.lld \
+    AR=llvm-ar \
+    NM=llvm-nm \
+    OBJCOPY=llvm-objcopy \
+    OBJDUMP=llvm-objdump \
+    STRIP=llvm-strip
 
 if [ ! -f "$kernel" ]; then
 	echo -e "\nCompilation failed!"
