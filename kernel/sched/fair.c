@@ -11030,7 +11030,6 @@ static inline enum fbq_type fbq_classify_rq(struct rq *rq)
 #ifdef CONFIG_NO_HZ_COMMON
 static struct {
 	cpumask_var_t idle_cpus_mask;
-	atomic_t nr_cpus;
 	unsigned long next_balance;     /* in jiffy units */
 	unsigned long next_update;     /* in jiffy units */
 } nohz ____cacheline_aligned;
@@ -12675,10 +12674,8 @@ void nohz_balance_exit_idle(unsigned int cpu)
 		/*
 		 * Completely isolated CPUs don't ever set, so we must test.
 		 */
-		if (likely(cpumask_test_cpu(cpu, nohz.idle_cpus_mask))) {
+		if (likely(cpumask_test_cpu(cpu, nohz.idle_cpus_mask)))
 			cpumask_clear_cpu(cpu, nohz.idle_cpus_mask);
-			atomic_dec(&nohz.nr_cpus);
-		}
 		clear_bit(NOHZ_TICK_STOPPED, nohz_flags(cpu));
 	}
 }
@@ -12751,7 +12748,6 @@ void nohz_balance_enter_idle(int cpu)
 		return;
 
 	cpumask_set_cpu(cpu, nohz.idle_cpus_mask);
-	atomic_inc(&nohz.nr_cpus);
 	set_bit(NOHZ_TICK_STOPPED, nohz_flags(cpu));
 }
 #else
@@ -13016,7 +13012,7 @@ static inline bool nohz_kick_needed(struct rq *rq, bool only_update)
 	}
 
 	/*
-	 * Most of the time system is not 100% busy. i.e nohz.nr_cpus > 0
+	 * Most of the time system is not 100% busy.
 	 * Skip the read if time is not due.
 	 *
 	 * None are in tickless mode and hence no need for NOHZ idle load
