@@ -13023,7 +13023,7 @@ static inline bool nohz_kick_needed(struct rq *rq, bool only_update)
 	 * balancing:
 	 */
 	cpumask_andnot(&cpumask, nohz.idle_cpus_mask, cpu_isolated_mask);
-	if (cpumask_empty(&cpumask))
+	if (unlikely(cpumask_empty(&cpumask)))
 		return false;
 
 	if (only_update)
