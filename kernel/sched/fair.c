@@ -13008,23 +13008,26 @@ static inline bool nohz_kick_needed(struct rq *rq, bool only_update)
 	set_cpu_sd_state_busy();
 	nohz_balance_exit_idle(cpu);
 
+	if (only_update) {
+		if (time_before(now, nohz.next_update))
+			return false;
+	} else if (time_before(now, nohz.next_balance)) {
+		return false;
+	}
+
 	/*
+	 * Most of the time system is not 100% busy. i.e nohz.nr_cpus > 0
+	 * Skip the read if time is not due.
+	 *
 	 * None are in tickless mode and hence no need for NOHZ idle load
-	 * balancing.
+	 * balancing:
 	 */
 	cpumask_andnot(&cpumask, nohz.idle_cpus_mask, cpu_isolated_mask);
 	if (cpumask_empty(&cpumask))
 		return false;
 
-	if (only_update) {
-		if (time_before(now, nohz.next_update))
-			return false;
-		else
-			return true;
-	}
-
-	if (time_before(now, nohz.next_balance))
-		return false;
+	if (only_update)
+		return true;
 
 	/*
 	 * If energy aware is enabled, do idle load balance if runqueue has
