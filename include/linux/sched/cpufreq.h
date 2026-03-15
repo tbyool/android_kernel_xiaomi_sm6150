@@ -39,6 +39,17 @@ static inline __maybe_unused unsigned long map_util_perf(unsigned long util)
 	return util + (util >> 2);
 }
 
+/* Exported helpers for external cpufreq governors (e.g. loadable modules) */
+unsigned long cpufreq_get_capacity_ref_freq(struct cpufreq_policy *policy);
+unsigned long sugov_effective_cpu_perf(int cpu, unsigned long actual,
+				       unsigned long min, unsigned long max);
+void cpufreq_get_effective_util(int cpu, unsigned long boost,
+				unsigned long *out_util,
+				unsigned long *out_bw_min);
+bool cpufreq_cpu_dl_bw_exceeded(int cpu, unsigned long bw_min);
+bool cpufreq_cpu_uclamp_capped(int cpu);
+// cpufreq_scx_switched_all(void) removed for 4.19!!
+
 #endif /* CONFIG_CPU_FREQ */
 
 #endif /* _LINUX_SCHED_CPUFREQ_H */

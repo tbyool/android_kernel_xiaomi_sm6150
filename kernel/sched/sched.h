@@ -2876,6 +2876,24 @@ static inline void cpufreq_update_util(struct rq *rq, unsigned int flags) {}
 #ifdef CONFIG_UCLAMP_TASK
 unsigned long uclamp_eff_value(struct task_struct *p, enum uclamp_id clamp_id);
 
+static inline unsigned long cpu_util_cfs(struct rq *rq);
+static inline unsigned long cpu_util_rt(struct rq *rq);
+
+/* Is the rq being capped/throttled by uclamp_max? */
+static inline bool uclamp_rq_is_capped(struct rq *rq)
+{
+	unsigned long rq_util;
+	unsigned long max_util;
+
+	if (!static_branch_likely(&sched_uclamp_used))
+		return false;
+
+	rq_util = cpu_util_cfs(rq) + cpu_util_rt(rq);
+	max_util = READ_ONCE(rq->uclamp[UCLAMP_MAX].value);
+
+	return max_util != SCHED_CAPACITY_SCALE && rq_util >= max_util;
+}
+
 /*
  * When uclamp is compiled in, the aggregation at rq level is 'turned off'
  * by default in the fast path and only gets turned on once userspace performs
@@ -3120,13 +3138,11 @@ static inline unsigned long cpu_util_rt(struct rq *rq)
 #endif
 
 #ifdef CONFIG_SMP
-#ifndef CONFIG_SCHED_WALT
 static inline unsigned long cpu_util(int cpu)
 {
 	return min(__cpu_util(cpu) + cpu_util_rt(cpu_rq(cpu)),
 		   capacity_orig_of(cpu));
 }
-#endif
 #endif
 
 #ifdef CONFIG_HAVE_SCHED_AVG_IRQ
