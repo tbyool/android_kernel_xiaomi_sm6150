@@ -164,7 +164,7 @@ jobs:
           ccache -o compression_level=1
           ccache -z
 
-      - name: "🩹 [PATCH] :: KERNEL_SU"
+      - name: "🩹 [PATCH] :: KERNEL_SU & SUSFS"
         if: matrix.enable_ksu == true
         run: |
           echo "Memulai Injeksi KernelSU..."
@@ -178,6 +178,11 @@ jobs:
             echo "KSU_SELECTOR tidak valid: ${{ inputs.ksu_selector }}"
             exit 1
           fi
+
+          echo "Mengaplikasikan Patch SUSFS Inline Hook..."
+          wget -q "${{ env.KSU_NEXT_HOOK_PATCH }}" -O susfs_inline_hook.sh
+          chmod +x susfs_inline_hook.sh
+          ./susfs_inline_hook.sh
 
           echo "Mengaplikasikan UMOUNT Patch..."
           wget -q "${{ env.KSU_UMOUNT_PATCH }}" -O umount.patch
