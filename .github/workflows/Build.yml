@@ -50,17 +50,8 @@ jobs:
       matrix:
         variant: [aosp, miui, aosp-ksu, miui-ksu]
         include:
-          - variant: aosp
-            patch_miui: false
-            enable_ksu: false
-          - variant: miui
-            patch_miui: true
-            enable_ksu: false
           - variant: aosp-ksu
             patch_miui: false
-            enable_ksu: true
-          - variant: miui-ksu
-            patch_miui: true
             enable_ksu: true
     steps:
       - name: "⬢ [INIT] :: SOURCE_CHECKOUT"
