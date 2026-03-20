@@ -1,7 +1,7 @@
 name: "Build Kernel"
 
 # ------------------------------------------------------------------
-# INPUT: KSU selector dipilih saat trigger workflow
+# INPUT: KSU & OS Selector (Dynamic Routing Control)
 # ------------------------------------------------------------------
 on:
   workflow_dispatch:
@@ -15,6 +15,15 @@ on:
           - NONE
           - KSU_BLXX
           - KSU_NEXT
+      os_variant:
+        description: "OS Target (Hindari redundansi komputasi)"
+        required: true
+        default: "AOSP"
+        type: choice
+        options:
+          - AOSP
+          - MIUI
+          - BOTH
 
 env:
   # --- NERV HQ CONFIGURATION ---
@@ -45,7 +54,7 @@ env:
 
 jobs:
   # ------------------------------------------------------------------
-  # PHASE 0: DYNAMIC MATRIX ROUTING (THE SELECTION METHOD)
+  # PHASE 0: DYNAMIC MATRIX ROUTING (THE ABSOLUTE SELECTION METHOD)
   # ------------------------------------------------------------------
   setup_env:
     runs-on: ubuntu-latest
@@ -56,16 +65,46 @@ jobs:
         id: set-matrix
         run: |
           KSU_INPUT="${{ inputs.ksu_selector }}"
-          echo "Evaluasi KSU Selector: $KSU_INPUT"
+          OS_INPUT="${{ inputs.os_variant }}"
           
-          if [ "$KSU_INPUT" == "NONE" ]; then
-            # Vektor 0: Jika NONE, hanya spawn AOSP & MIUI murni
-            JSON='[{"variant":"aosp","patch_miui":false,"enable_ksu":false},{"variant":"miui","patch_miui":true,"enable_ksu":false}]'
-          else
-            # Vektor 1: Jika KSU terpilih, spawn AOSP-KSU & MIUI-KSU
-            JSON='[{"variant":"aosp-ksu","patch_miui":false,"enable_ksu":true},{"variant":"miui-ksu","patch_miui":true,"enable_ksu":true}]'
+          echo "Inisiasi Kalkulasi Matriks..."
+          echo "KSU Target: $KSU_INPUT | OS Target: $OS_INPUT"
+          
+          # Inisialisasi Array JSON Kosong
+          JSON="["
+          
+          # Fungsi injeksi objek ke dalam Array JSON
+          add_target() {
+            local variant_name=$1
+            local is_miui=$2
+            local is_ksu=$3
+            
+            # Tambahkan koma jika array tidak kosong
+            [ "$JSON" != "[" ] && JSON="$JSON,"
+            JSON="$JSON{\"variant\":\"$variant_name\",\"patch_miui\":$is_miui,\"enable_ksu\":$is_ksu}"
+          }
+
+          # Resolusi State KSU
+          KSU_STATE="false"
+          VARIANT_SUFFIX=""
+          if [ "$KSU_INPUT" != "NONE" ]; then
+            KSU_STATE="true"
+            VARIANT_SUFFIX="-ksu"
           fi
+
+          # Resolusi State OS (Hanya me-routing apa yang dipanggil)
+          if [[ "$OS_INPUT" == "AOSP" || "$OS_INPUT" == "BOTH" ]]; then
+            add_target "aosp$VARIANT_SUFFIX" "false" "$KSU_STATE"
+          fi
+
+          if [[ "$OS_INPUT" == "MIUI" || "$OS_INPUT" == "BOTH" ]]; then
+            add_target "miui$VARIANT_SUFFIX" "true" "$KSU_STATE"
+          fi
+
+          # Tutup Array
+          JSON="$JSON]"
           
+          echo "Compiled JSON Matrix: $JSON"
           echo "matrix=$JSON" >> $GITHUB_OUTPUT
 
   # ------------------------------------------------------------------
@@ -119,7 +158,6 @@ jobs:
       - name: "🩹 [PATCH] :: MIUI_OPTIMIZATION"
         if: matrix.patch_miui == true
         run: |
-          # Inline python script for reliability over sed
           python3 -c "
           import os, re
           targets = ['dsi-panel-k6-38-0c-0a-fhd-dsc-video.dtsi', 'dsi-panel-k6-38-0e-0b-fhd-dsc-video.dtsi']
@@ -129,7 +167,6 @@ jobs:
                       path = os.path.join(root, file)
                       with open(path, 'r') as f: content = f.read()
 
-                      # Safe regex replacement targeting exact properties
                       content = re.sub(r'qcom,mdss-pan-physical-width-dimension\s*=\s*<[0-9]+>;', 'qcom,mdss-pan-physical-width-dimension = <695>;', content)
                       content = re.sub(r'qcom,mdss-pan-physical-height-dimension\s*=\s*<[0-9]+>;', 'qcom,mdss-pan-physical-height-dimension = <1546>;', content)
 
@@ -185,7 +222,6 @@ jobs:
           mkdir -p release_zips
           git clone -q https://github.com/RapliVx/AnyKernel3.git -b sweet AnyKernel3
 
-          # Create Banner once
           cat > AnyKernel3/banner << 'EOF'
            SORY
            QXQVYXY
@@ -216,7 +252,6 @@ jobs:
            FranxxCORE // MAMBOSU PROTOCOL
            BY RapliVX
           EOF
-          # Process all variants in loop
           for DIR in ./artifacts/*-unit; do
               VARIANT=$(basename "$DIR" -unit)
               echo "Packaging $VARIANT..."
@@ -226,7 +261,6 @@ jobs:
               cp -f $DIR/dtbo.img AnyKernel3/
 
               cd AnyKernel3
-              # Fast zip with -1 compression for speed, we zip again at release anyway
               zip -r1 "../release_zips/${KERNEL_NAME}-${VARIANT}-${CODENAME}-$(date +'%Y%m%d').zip" * -x .git README.md
               cd ..
           done
@@ -235,18 +269,19 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: "EVA-${{ github.run_number }}"
-          name: "ProjectEVA: MAMBOSU [Run ${{ github.run_number }}] [${{ inputs.ksu_selector }}]"
+          name: "ProjectEVA: MAMBOSU [Run ${{ github.run_number }}]"
           files: release_zips/*.zip
           body: |
             ### ⚠️ NERV SECURITY CLEARANCE REQUIRED
             **Mission:** Kernel Instrumentality
             **Device:** Redmi Note 10 Pro (sweet)
             **Compiler:** Clang ${{ env.CLANG_VER }}
+            
+            #### 📦 DEPLOYMENT STATUS:
+            Unit tereksekusi secara presisi berdasarkan input komputasi matriks *real-time*.
+            **OS Variant Target:** \`${{ inputs.os_variant }}\`
             **KSU Variant:** \`${{ inputs.ksu_selector }}\`
 
-            #### 📦 DEPLOYED UNITS:
-            Unit-unit yang dieksekusi dikonfigurasi secara dinamis menyesuaikan parameter matriks seleksi.
-
-            *Synchronization Ratio: 400%*
+            *Synchronization Ratio: Absolute*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
