@@ -1,7 +1,7 @@
 name: "Build Kernel"
 
 # ------------------------------------------------------------------
-# INPUT: KSU selector dipilih saat trigger workflow
+# INPUT: KSU & OS Selector (Dynamic Routing Control)
 # ------------------------------------------------------------------
 on:
   workflow_dispatch:
@@ -15,8 +15,20 @@ on:
           - NONE
           - KSU_BLXX
           - KSU_NEXT
+      os_variant:
+        description: "OS Target (Hindari redundansi komputasi)"
+        required: true
+        default: "AOSP"
+        type: choice
+        options:
+          - AOSP
+          - MIUI
+          - BOTH
 
 env:
+  # --- MODERN CI/CD ENFORCEMENT ---
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true # Membungkam peringatan deprecation Node.js 20
+
   # --- NERV HQ CONFIGURATION ---
   KERNEL_NAME: "FranxxCORE"
   DEVICE: "Sweet"
@@ -44,41 +56,93 @@ env:
   KSU_KPATCH_FIX: "https://github.com/TheSillyOk/kernel_ls_patches/raw/refs/heads/master/kpatch_fix.patch"
 
 jobs:
+  # ------------------------------------------------------------------
+  # PHASE 0: DYNAMIC MATRIX ROUTING (THE ABSOLUTE SELECTION METHOD)
+  # ------------------------------------------------------------------
+  setup_env:
+    runs-on: ubuntu-latest
+    outputs:
+      build_matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: "🧮 [MATRIX] :: GENERATE_DYNAMIC_UNITS"
+        id: set-matrix
+        run: |
+          KSU_INPUT="${{ inputs.ksu_selector }}"
+          OS_INPUT="${{ inputs.os_variant }}"
+
+          echo "Inisiasi Kalkulasi Matriks..."
+          echo "KSU Target: $KSU_INPUT | OS Target: $OS_INPUT"
+
+          JSON="["
+
+          add_target() {
+            local variant_name=$1
+            local is_miui=$2
+            local is_ksu=$3
+
+            [ "$JSON" != "[" ] && JSON="$JSON,"
+            JSON="$JSON{\"variant\":\"$variant_name\",\"patch_miui\":$is_miui,\"enable_ksu\":$is_ksu}"
+          }
+
+          KSU_STATE="false"
+          VARIANT_SUFFIX=""
+          if [ "$KSU_INPUT" != "NONE" ]; then
+            KSU_STATE="true"
+            VARIANT_SUFFIX="-ksu"
+          fi
+
+          if [[ "$OS_INPUT" == "AOSP" || "$OS_INPUT" == "BOTH" ]]; then
+            add_target "aosp$VARIANT_SUFFIX" "false" "$KSU_STATE"
+          fi
+
+          if [[ "$OS_INPUT" == "MIUI" || "$OS_INPUT" == "BOTH" ]]; then
+            add_target "miui$VARIANT_SUFFIX" "true" "$KSU_STATE"
+          fi
+
+          JSON="$JSON]"
+
+          echo "Compiled JSON Matrix: $JSON"
+          echo "matrix=$JSON" >> $GITHUB_OUTPUT
+
+  # ------------------------------------------------------------------
+  # PHASE 1: PARALLEL BUILD
+  # ------------------------------------------------------------------
   build:
+    needs: setup_env
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        variant: [aosp, miui, aosp-ksu, miui-ksu]
-        include:
-          - variant: aosp
-            patch_miui: false
-            enable_ksu: false
-          - variant: miui
-            patch_miui: true
-            enable_ksu: false
-          - variant: aosp-ksu
-            patch_miui: false
-            enable_ksu: true
-          - variant: miui-ksu
-            patch_miui: true
-            enable_ksu: true
+        include: ${{ fromJson(needs.setup_env.outputs.build_matrix) }}
     steps:
       - name: "⬢ [INIT] :: SOURCE_CHECKOUT"
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
+      # --- PERBAIKAN FATAL LOGIC CLANG CACHE ---
       - name: "⚡ [RESTORE] :: CLANG_TOOLCHAIN"
+        id: clang-cache
         uses: actions/cache@v4
         with:
           path: aosp-clang
           key: ${{ runner.os }}-clang-${{ env.CLANG_VER }}
-          fail-on-cache-miss: true
+          # fail-on-cache-miss: true -> DIMATIKAN! Mencegah hard-crash.
+
+      - name: "🔧 [PROVISION] :: CLANG_FALLBACK"
+        if: steps.clang-cache.outputs.cache-hit != 'true'
+        run: |
+          echo "⚠️ Cache Miss! Menarik Clang secara langsung dari NERV HQ..."
+          wget -q ${{ env.CLANG_URL }} -O aosp-clang.tar.gz
+          mkdir -p aosp-clang
+          tar -xf aosp-clang.tar.gz -C aosp-clang
+          rm -f aosp-clang.tar.gz
+      # -----------------------------------------
 
       - name: "⚡ [CACHE] :: CCACHE_ACCELERATION"
         uses: actions/cache@v4
         with:
-          path: ~/.ccache
+          path: /home/runner/.ccache
           key: ${{ runner.os }}-ccache-${{ matrix.variant }}-${{ github.sha }}
           restore-keys: |
             ${{ runner.os }}-ccache-${{ matrix.variant }}-
@@ -100,10 +164,39 @@ jobs:
           ccache -o compression_level=1
           ccache -z
 
+      - name: "🩹 [PATCH] :: KERNEL_SU & SUSFS"
+        if: matrix.enable_ksu == true
+        run: |
+          echo "Memulai Injeksi KernelSU..."
+          if [ "${{ inputs.ksu_selector }}" == "KSU_BLXX" ]; then
+            echo "Memilih KernelSU BLXX"
+            curl -LSs "${{ env.KSU_BLXX_SETUP_URI }}" | bash -s "${{ env.KSU_BLXX_BRANCH }}"
+          elif [ "${{ inputs.ksu_selector }}" == "KSU_NEXT" ]; then
+            echo "Memilih KernelSU Next"
+            curl -LSs "${{ env.KSU_NEXT_SETUP_URI }}" | bash -s "${{ env.KSU_NEXT_BRANCH }}"
+          else
+            echo "KSU_SELECTOR tidak valid: ${{ inputs.ksu_selector }}"
+            exit 1
+          fi
+
+          echo "Mengaplikasikan Patch SUSFS Inline Hook..."
+          wget -q "${{ env.KSU_NEXT_HOOK_PATCH }}" -O susfs_inline_hook.sh
+          chmod +x susfs_inline_hook.sh
+          ./susfs_inline_hook.sh
+
+          echo "Mengaplikasikan UMOUNT Patch..."
+          wget -q "${{ env.KSU_UMOUNT_PATCH }}" -O umount.patch
+          git apply --check umount.patch || echo "Umount patch apply check failed, trying to apply anyway"
+          git apply umount.patch || echo "Umount patch apply failed"
+
+          echo "Mengaplikasikan KPATCH FIX..."
+          wget -q "${{ env.KSU_KPATCH_FIX }}" -O kpatch_fix.patch
+          git apply --check kpatch_fix.patch || echo "kpatch fix apply check failed, trying to apply anyway"
+          git apply kpatch_fix.patch || echo "kpatch fix apply failed"
+
       - name: "🩹 [PATCH] :: MIUI_OPTIMIZATION"
         if: matrix.patch_miui == true
         run: |
-          # Inline python script for reliability over sed
           python3 -c "
           import os, re
           targets = ['dsi-panel-k6-38-0c-0a-fhd-dsc-video.dtsi', 'dsi-panel-k6-38-0e-0b-fhd-dsc-video.dtsi']
@@ -113,7 +206,6 @@ jobs:
                       path = os.path.join(root, file)
                       with open(path, 'r') as f: content = f.read()
 
-                      # Safe regex replacement targeting exact properties
                       content = re.sub(r'qcom,mdss-pan-physical-width-dimension\s*=\s*<[0-9]+>;', 'qcom,mdss-pan-physical-width-dimension = <695>;', content)
                       content = re.sub(r'qcom,mdss-pan-physical-height-dimension\s*=\s*<[0-9]+>;', 'qcom,mdss-pan-physical-height-dimension = <1546>;', content)
 
@@ -169,7 +261,6 @@ jobs:
           mkdir -p release_zips
           git clone -q https://github.com/RapliVx/AnyKernel3.git -b sweet AnyKernel3
 
-          # Create Banner once
           cat > AnyKernel3/banner << 'EOF'
            SORY
            QXQVYXY
@@ -200,7 +291,6 @@ jobs:
            FranxxCORE // MAMBOSU PROTOCOL
            BY RapliVX
           EOF
-          # Process all variants in loop
           for DIR in ./artifacts/*-unit; do
               VARIANT=$(basename "$DIR" -unit)
               echo "Packaging $VARIANT..."
@@ -210,7 +300,6 @@ jobs:
               cp -f $DIR/dtbo.img AnyKernel3/
 
               cd AnyKernel3
-              # Fast zip with -1 compression for speed, we zip again at release anyway
               zip -r1 "../release_zips/${KERNEL_NAME}-${VARIANT}-${CODENAME}-$(date +'%Y%m%d').zip" * -x .git README.md
               cd ..
           done
@@ -227,14 +316,11 @@ jobs:
             **Device:** Redmi Note 10 Pro (sweet)
             **Compiler:** Clang ${{ env.CLANG_VER }}
 
-            #### 📦 DEPLOYED UNITS:
-            | Variant | KSU | MIUI Patch |
-            | :--- | :---: | :---: |
-            | **AOSP** | ❌ | ❌ |
-            | **MIUI** | ❌ | ✅ |
-            | **AOSP-KSU** | ✅ | ❌ |
-            | **MIUI-KSU** | ✅ | ✅ |
+            #### 📦 DEPLOYMENT STATUS:
+            Unit tereksekusi secara presisi berdasarkan input komputasi matriks *real-time*.
+            **OS Variant Target:** \`${{ inputs.os_variant }}\`
+            **KSU Variant:** \`${{ inputs.ksu_selector }}\`
 
-            *Synchronization Ratio: 400%*
+            *Synchronization Ratio: Absolute*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
