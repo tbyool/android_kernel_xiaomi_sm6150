@@ -26,6 +26,9 @@ on:
           - BOTH
 
 env:
+  # --- MODERN CI/CD ENFORCEMENT ---
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true # Membungkam peringatan deprecation Node.js 20
+
   # --- NERV HQ CONFIGURATION ---
   KERNEL_NAME: "FranxxCORE"
   DEVICE: "Sweet"
@@ -70,21 +73,17 @@ jobs:
           echo "Inisiasi Kalkulasi Matriks..."
           echo "KSU Target: $KSU_INPUT | OS Target: $OS_INPUT"
           
-          # Inisialisasi Array JSON Kosong
           JSON="["
           
-          # Fungsi injeksi objek ke dalam Array JSON
           add_target() {
             local variant_name=$1
             local is_miui=$2
             local is_ksu=$3
             
-            # Tambahkan koma jika array tidak kosong
             [ "$JSON" != "[" ] && JSON="$JSON,"
             JSON="$JSON{\"variant\":\"$variant_name\",\"patch_miui\":$is_miui,\"enable_ksu\":$is_ksu}"
           }
 
-          # Resolusi State KSU
           KSU_STATE="false"
           VARIANT_SUFFIX=""
           if [ "$KSU_INPUT" != "NONE" ]; then
@@ -92,7 +91,6 @@ jobs:
             VARIANT_SUFFIX="-ksu"
           fi
 
-          # Resolusi State OS (Hanya me-routing apa yang dipanggil)
           if [[ "$OS_INPUT" == "AOSP" || "$OS_INPUT" == "BOTH" ]]; then
             add_target "aosp$VARIANT_SUFFIX" "false" "$KSU_STATE"
           fi
@@ -101,7 +99,6 @@ jobs:
             add_target "miui$VARIANT_SUFFIX" "true" "$KSU_STATE"
           fi
 
-          # Tutup Array
           JSON="$JSON]"
           
           echo "Compiled JSON Matrix: $JSON"
@@ -123,12 +120,24 @@ jobs:
         with:
           fetch-depth: 1
 
+      # --- PERBAIKAN FATAL LOGIC CLANG CACHE ---
       - name: "⚡ [RESTORE] :: CLANG_TOOLCHAIN"
+        id: clang-cache
         uses: actions/cache@v4
         with:
           path: aosp-clang
           key: ${{ runner.os }}-clang-${{ env.CLANG_VER }}
-          fail-on-cache-miss: true
+          # fail-on-cache-miss: true -> DIMATIKAN! Mencegah hard-crash.
+
+      - name: "🔧 [PROVISION] :: CLANG_FALLBACK"
+        if: steps.clang-cache.outputs.cache-hit != 'true'
+        run: |
+          echo "⚠️ Cache Miss! Menarik Clang secara langsung dari NERV HQ..."
+          wget -q ${{ env.CLANG_URL }} -O aosp-clang.tar.gz
+          mkdir -p aosp-clang
+          tar -xf aosp-clang.tar.gz -C aosp-clang
+          rm -f aosp-clang.tar.gz
+      # -----------------------------------------
 
       - name: "⚡ [CACHE] :: CCACHE_ACCELERATION"
         uses: actions/cache@v4
