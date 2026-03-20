@@ -44,15 +44,40 @@ env:
   KSU_KPATCH_FIX: "https://github.com/TheSillyOk/kernel_ls_patches/raw/refs/heads/master/kpatch_fix.patch"
 
 jobs:
+  # ------------------------------------------------------------------
+  # PHASE 0: DYNAMIC MATRIX ROUTING (THE SELECTION METHOD)
+  # ------------------------------------------------------------------
+  setup_env:
+    runs-on: ubuntu-latest
+    outputs:
+      build_matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: "🧮 [MATRIX] :: GENERATE_DYNAMIC_UNITS"
+        id: set-matrix
+        run: |
+          KSU_INPUT="${{ inputs.ksu_selector }}"
+          echo "Evaluasi KSU Selector: $KSU_INPUT"
+          
+          if [ "$KSU_INPUT" == "NONE" ]; then
+            # Vektor 0: Jika NONE, hanya spawn AOSP & MIUI murni
+            JSON='[{"variant":"aosp","patch_miui":false,"enable_ksu":false},{"variant":"miui","patch_miui":true,"enable_ksu":false}]'
+          else
+            # Vektor 1: Jika KSU terpilih, spawn AOSP-KSU & MIUI-KSU
+            JSON='[{"variant":"aosp-ksu","patch_miui":false,"enable_ksu":true},{"variant":"miui-ksu","patch_miui":true,"enable_ksu":true}]'
+          fi
+          
+          echo "matrix=$JSON" >> $GITHUB_OUTPUT
+
+  # ------------------------------------------------------------------
+  # PHASE 1: PARALLEL BUILD
+  # ------------------------------------------------------------------
   build:
+    needs: setup_env
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        variant: [aosp, miui, aosp-ksu, miui-ksu]
-        include:
-          - variant: aosp-ksu
-            patch_miui: false
-            enable_ksu: true
+        include: ${{ fromJson(needs.setup_env.outputs.build_matrix) }}
     steps:
       - name: "⬢ [INIT] :: SOURCE_CHECKOUT"
         uses: actions/checkout@v4
@@ -210,21 +235,17 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: "EVA-${{ github.run_number }}"
-          name: "ProjectEVA: MAMBOSU [Run ${{ github.run_number }}]"
+          name: "ProjectEVA: MAMBOSU [Run ${{ github.run_number }}] [${{ inputs.ksu_selector }}]"
           files: release_zips/*.zip
           body: |
             ### ⚠️ NERV SECURITY CLEARANCE REQUIRED
             **Mission:** Kernel Instrumentality
             **Device:** Redmi Note 10 Pro (sweet)
             **Compiler:** Clang ${{ env.CLANG_VER }}
+            **KSU Variant:** \`${{ inputs.ksu_selector }}\`
 
             #### 📦 DEPLOYED UNITS:
-            | Variant | KSU | MIUI Patch |
-            | :--- | :---: | :---: |
-            | **AOSP** | ❌ | ❌ |
-            | **MIUI** | ❌ | ✅ |
-            | **AOSP-KSU** | ✅ | ❌ |
-            | **MIUI-KSU** | ✅ | ✅ |
+            Unit-unit yang dieksekusi dikonfigurasi secara dinamis menyesuaikan parameter matriks seleksi.
 
             *Synchronization Ratio: 400%*
         env:
