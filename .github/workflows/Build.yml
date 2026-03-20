@@ -50,7 +50,7 @@ env:
   KSU_BLXX_SETUP_URI: "https://github.com/backslashxx/KernelSU/raw/refs/heads/master/kernel/setup.sh"
   KSU_BLXX_BRANCH: "master"
   KSU_NEXT_SETUP_URI: "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh"
-  KSU_NEXT_BRANCH: "next" # Dikembalikan ke branch standar, bukan legacy_susfs
+  KSU_NEXT_BRANCH: "legacy_susfs"
   KSU_NEXT_HOOK_PATCH: "https://github.com/JackA1ltman/NonGKI_Kernel_Build_2nd/raw/refs/heads/mainline/Patches/susfs_inline_hook_patches.sh"
   KSU_UMOUNT_PATCH: "https://github.com/tbyool/android_kernel_xiaomi_sm6150/commit/64db0dfa2f8aa6c519dbf21eb65c9b89643cda3d.patch"
   KSU_KPATCH_FIX: "https://github.com/TheSillyOk/kernel_ls_patches/raw/refs/heads/master/kpatch_fix.patch"
@@ -164,7 +164,7 @@ jobs:
           ccache -o compression_level=1
           ccache -z
 
-      - name: "🩹 [PATCH] :: KERNEL_SU & SUSFS"
+      - name: "🩹 [PATCH] :: KERNEL_SU"
         if: matrix.enable_ksu == true
         run: |
           echo "Memulai Injeksi KernelSU..."
@@ -178,11 +178,6 @@ jobs:
             echo "KSU_SELECTOR tidak valid: ${{ inputs.ksu_selector }}"
             exit 1
           fi
-
-          echo "Mengaplikasikan Patch SUSFS Inline Hook..."
-          wget -q "${{ env.KSU_NEXT_HOOK_PATCH }}" -O susfs_inline_hook.sh
-          chmod +x susfs_inline_hook.sh
-          ./susfs_inline_hook.sh
 
           echo "Mengaplikasikan UMOUNT Patch..."
           wget -q "${{ env.KSU_UMOUNT_PATCH }}" -O umount.patch
@@ -208,7 +203,9 @@ jobs:
 
                       content = re.sub(r'qcom,mdss-pan-physical-width-dimension\s*=\s*<[0-9]+>;', 'qcom,mdss-pan-physical-width-dimension = <695>;', content)
                       content = re.sub(r'qcom,mdss-pan-physical-height-dimension\s*=\s*<[0-9]+>;', 'qcom,mdss-pan-physical-height-dimension = <1546>;', content)
+
                       with open(path, 'w') as f: f.write(content)
+                      print(f'Patched dimensions for MIUI in {path}')
           "
 
       - name: "⚔️ [COMPILE] :: KERNEL_BUILD"
@@ -216,14 +213,6 @@ jobs:
           export PATH="${{ github.workspace }}/aosp-clang/bin:$PATH"
           export ARCH=arm64
           export SUBARCH=arm64
-
-          if [ "${{ inputs.ksu_selector }}" != "KSU_NEXT" ]; then
-            printf '%s\n' \
-              'CONFIG_LTO_CLANG=y' \
-              'CONFIG_LTO_CLANG_THIN=y' \
-              >> arch/arm64/configs/${{ env.DEFCONFIG }}
-            sed -i '/CONFIG_LTO_CLANG_FULL/d' arch/arm64/configs/${{ env.DEFCONFIG }}
-          fi
 
           make O=out ${DEFCONFIG}
 
@@ -299,6 +288,8 @@ jobs:
           EOF
           for DIR in ./artifacts/*-unit; do
               VARIANT=$(basename "$DIR" -unit)
+              echo "Packaging $VARIANT..."
+
               cp -f $DIR/Image.gz AnyKernel3/
               cp -f $DIR/dtb.img AnyKernel3/
               cp -f $DIR/dtbo.img AnyKernel3/
@@ -319,11 +310,6 @@ jobs:
             **Mission:** Kernel Instrumentality
             **Device:** Redmi Note 10 Pro (sweet)
             **Compiler:** Clang ${{ env.CLANG_VER }}
-            
-            #### 📦 DEPLOYMENT STATUS:
-            Unit tereksekusi murni tanpa injeksi eksternal yang redundan.
-            **OS Variant Target:** \`${{ inputs.os_variant }}\`
-            **KSU Variant:** \`${{ inputs.ksu_selector }}\`
 
             #### 📦 DEPLOYMENT STATUS:
             Unit tereksekusi secara presisi berdasarkan input komputasi matriks *real-time*.
