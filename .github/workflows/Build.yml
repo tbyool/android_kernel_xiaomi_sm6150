@@ -27,7 +27,9 @@ on:
 
 env:
   # --- MODERN CI/CD ENFORCEMENT ---
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true # Membungkam peringatan deprecation Node.js 20
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  NODE_OPTIONS: "--no-deprecation"
+  CCACHE_DIR: ${{ github.workspace }}/.ccache
 
   # --- NERV HQ CONFIGURATION ---
   KERNEL_NAME: "FranxxCORE"
@@ -50,14 +52,14 @@ env:
   KSU_BLXX_SETUP_URI: "https://github.com/backslashxx/KernelSU/raw/refs/heads/master/kernel/setup.sh"
   KSU_BLXX_BRANCH: "master"
   KSU_NEXT_SETUP_URI: "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh"
-  KSU_NEXT_BRANCH: "legacy_susfs"
+  KSU_NEXT_BRANCH: "next" # Dikembalikan ke branch standar, bukan legacy_susfs
   KSU_NEXT_HOOK_PATCH: "https://github.com/JackA1ltman/NonGKI_Kernel_Build_2nd/raw/refs/heads/mainline/Patches/susfs_inline_hook_patches.sh"
   KSU_UMOUNT_PATCH: "https://github.com/tbyool/android_kernel_xiaomi_sm6150/commit/64db0dfa2f8aa6c519dbf21eb65c9b89643cda3d.patch"
   KSU_KPATCH_FIX: "https://github.com/TheSillyOk/kernel_ls_patches/raw/refs/heads/master/kpatch_fix.patch"
 
 jobs:
   # ------------------------------------------------------------------
-  # PHASE 0: DYNAMIC MATRIX ROUTING (THE ABSOLUTE SELECTION METHOD)
+  # PHASE 0: DYNAMIC MATRIX ROUTING
   # ------------------------------------------------------------------
   setup_env:
     runs-on: ubuntu-latest
@@ -69,9 +71,6 @@ jobs:
         run: |
           KSU_INPUT="${{ inputs.ksu_selector }}"
           OS_INPUT="${{ inputs.os_variant }}"
-          
-          echo "Inisiasi Kalkulasi Matriks..."
-          echo "KSU Target: $KSU_INPUT | OS Target: $OS_INPUT"
           
           JSON="["
           
@@ -101,7 +100,6 @@ jobs:
 
           JSON="$JSON]"
           
-          echo "Compiled JSON Matrix: $JSON"
           echo "matrix=$JSON" >> $GITHUB_OUTPUT
 
   # ------------------------------------------------------------------
@@ -120,29 +118,28 @@ jobs:
         with:
           fetch-depth: 1
 
-      # --- PERBAIKAN FATAL LOGIC CLANG CACHE ---
       - name: "⚡ [RESTORE] :: CLANG_TOOLCHAIN"
         id: clang-cache
         uses: actions/cache@v4
         with:
           path: aosp-clang
           key: ${{ runner.os }}-clang-${{ env.CLANG_VER }}
-          # fail-on-cache-miss: true -> DIMATIKAN! Mencegah hard-crash.
 
       - name: "🔧 [PROVISION] :: CLANG_FALLBACK"
         if: steps.clang-cache.outputs.cache-hit != 'true'
         run: |
-          echo "⚠️ Cache Miss! Menarik Clang secara langsung dari NERV HQ..."
           wget -q ${{ env.CLANG_URL }} -O aosp-clang.tar.gz
           mkdir -p aosp-clang
           tar -xf aosp-clang.tar.gz -C aosp-clang
           rm -f aosp-clang.tar.gz
-      # -----------------------------------------
+
+      - name: "📁 [INIT] :: PREPARE_CCACHE_DIR"
+        run: mkdir -p ${{ env.CCACHE_DIR }}
 
       - name: "⚡ [CACHE] :: CCACHE_ACCELERATION"
         uses: actions/cache@v4
         with:
-          path: ~/.ccache
+          path: ${{ env.CCACHE_DIR }}
           key: ${{ runner.os }}-ccache-${{ matrix.variant }}-${{ github.sha }}
           restore-keys: |
             ${{ runner.os }}-ccache-${{ matrix.variant }}-
@@ -164,6 +161,52 @@ jobs:
           ccache -o compression_level=1
           ccache -z
 
+      - name: "🧬 [MOD] :: KSU_BLXX_INTEGRATION"
+        if: matrix.enable_ksu == true && inputs.ksu_selector == 'KSU_BLXX'
+        run: |
+          apply_patch() {
+            local URL="$1"
+            local PATCHFILE=$(mktemp /tmp/kpatch.XXXXXX.patch)
+            wget -q "$URL" -O "$PATCHFILE"
+            patch -p1 --fuzz=3 --batch --forward < "$PATCHFILE" || true
+            rm -f "$PATCHFILE"
+          }
+          apply_patch "${{ env.KSU_UMOUNT_PATCH }}"
+          apply_patch "${{ env.KSU_KPATCH_FIX }}"
+
+          curl -LSs "${{ env.KSU_BLXX_SETUP_URI }}" | bash -s ${{ env.KSU_BLXX_BRANCH }}
+
+          printf '%s\n' \
+            'CONFIG_KSU=y' \
+            'CONFIG_KSU_TAMPER_SYSCALL_TABLE=y' \
+            'CONFIG_KPROBES=y' \
+            'CONFIG_HAVE_KPROBES=y' \
+            'CONFIG_KPROBE_EVENTS=y' \
+            'CONFIG_KRETPROBES=y' \
+            'CONFIG_HAVE_SYSCALL_TRACEPOINTS=y' \
+            >> arch/arm64/configs/${{ env.DEFCONFIG }}
+
+      - name: "🧬 [MOD] :: KSU_NEXT_INTEGRATION"
+        if: matrix.enable_ksu == true && inputs.ksu_selector == 'KSU_NEXT'
+        run: |
+          apply_patch() {
+            local URL="$1"
+            local PATCHFILE=$(mktemp /tmp/kpatch.XXXXXX.patch)
+            wget -q "$URL" -O "$PATCHFILE"
+            patch -p1 --fuzz=3 --batch --forward < "$PATCHFILE" || true
+            rm -f "$PATCHFILE"
+          }
+          apply_patch "${{ env.KSU_UMOUNT_PATCH }}"
+          apply_patch "${{ env.KSU_KPATCH_FIX }}"
+
+          curl -LSs "${{ env.KSU_NEXT_HOOK_PATCH }}" | bash
+          curl -LSs "${{ env.KSU_NEXT_SETUP_URI }}" | bash -s ${{ env.KSU_NEXT_BRANCH }}
+
+          printf '%s\n' \
+            'CONFIG_KSU=y' \
+            'KSU_MANUAL_HOOK=y' \
+            >> arch/arm64/configs/${{ env.DEFCONFIG }}
+
       - name: "🩹 [PATCH] :: MIUI_OPTIMIZATION"
         if: matrix.patch_miui == true
         run: |
@@ -175,12 +218,9 @@ jobs:
                   if file in targets:
                       path = os.path.join(root, file)
                       with open(path, 'r') as f: content = f.read()
-
                       content = re.sub(r'qcom,mdss-pan-physical-width-dimension\s*=\s*<[0-9]+>;', 'qcom,mdss-pan-physical-width-dimension = <695>;', content)
                       content = re.sub(r'qcom,mdss-pan-physical-height-dimension\s*=\s*<[0-9]+>;', 'qcom,mdss-pan-physical-height-dimension = <1546>;', content)
-
                       with open(path, 'w') as f: f.write(content)
-                      print(f'Patched dimensions for MIUI in {path}')
           "
 
       - name: "⚔️ [COMPILE] :: KERNEL_BUILD"
@@ -188,6 +228,14 @@ jobs:
           export PATH="${{ github.workspace }}/aosp-clang/bin:$PATH"
           export ARCH=arm64
           export SUBARCH=arm64
+
+          if [ "${{ inputs.ksu_selector }}" != "KSU_NEXT" ]; then
+            printf '%s\n' \
+              'CONFIG_LTO_CLANG=y' \
+              'CONFIG_LTO_CLANG_THIN=y' \
+              >> arch/arm64/configs/${{ env.DEFCONFIG }}
+            sed -i '/CONFIG_LTO_CLANG_FULL/d' arch/arm64/configs/${{ env.DEFCONFIG }}
+          fi
 
           make O=out ${DEFCONFIG}
 
@@ -263,8 +311,6 @@ jobs:
           EOF
           for DIR in ./artifacts/*-unit; do
               VARIANT=$(basename "$DIR" -unit)
-              echo "Packaging $VARIANT..."
-
               cp -f $DIR/Image.gz AnyKernel3/
               cp -f $DIR/dtb.img AnyKernel3/
               cp -f $DIR/dtbo.img AnyKernel3/
@@ -287,7 +333,7 @@ jobs:
             **Compiler:** Clang ${{ env.CLANG_VER }}
             
             #### 📦 DEPLOYMENT STATUS:
-            Unit tereksekusi secara presisi berdasarkan input komputasi matriks *real-time*.
+            Unit tereksekusi murni tanpa injeksi eksternal yang redundan.
             **OS Variant Target:** \`${{ inputs.os_variant }}\`
             **KSU Variant:** \`${{ inputs.ksu_selector }}\`
 
