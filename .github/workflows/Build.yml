@@ -1,0 +1,240 @@
+name: "Build Kernel"
+
+# ------------------------------------------------------------------
+# INPUT: KSU selector dipilih saat trigger workflow
+# ------------------------------------------------------------------
+on:
+  workflow_dispatch:
+    inputs:
+      ksu_selector:
+        description: "KernelSU Variant"
+        required: true
+        default: "NONE"
+        type: choice
+        options:
+          - NONE
+          - KSU_BLXX
+          - KSU_NEXT
+
+env:
+  # --- NERV HQ CONFIGURATION ---
+  KERNEL_NAME: "FranxxCORE"
+  DEVICE: "Sweet"
+  CODENAME: "AHumanWorks"
+  DEFCONFIG: "sweet_defconfig"
+  CLANG_VER: "r547379"
+  CLANG_URL: "https://github.com/topnotchfreaks/clang/releases/download/v1.0.0/clang-r547379.tar.gz"
+
+  # --- MAGI SYSTEM IDENTITY ---
+  KBUILD_BUILD_USER: "RapliVX"
+  KBUILD_BUILD_HOST: "NyarchLinux"
+  TZ: "Asia/Jakarta"
+
+  # --- SECURITY CLEARANCE ---
+  TG_TOKEN: ${{ secrets.TG_TOKEN }}
+  TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+
+  # --- KSU SOURCES ---
+  KSU_BLXX_SETUP_URI: "https://github.com/backslashxx/KernelSU/raw/refs/heads/master/kernel/setup.sh"
+  KSU_BLXX_BRANCH: "master"
+  KSU_NEXT_SETUP_URI: "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh"
+  KSU_NEXT_BRANCH: "legacy_susfs"
+  KSU_NEXT_HOOK_PATCH: "https://github.com/JackA1ltman/NonGKI_Kernel_Build_2nd/raw/refs/heads/mainline/Patches/susfs_inline_hook_patches.sh"
+  KSU_UMOUNT_PATCH: "https://github.com/tbyool/android_kernel_xiaomi_sm6150/commit/64db0dfa2f8aa6c519dbf21eb65c9b89643cda3d.patch"
+  KSU_KPATCH_FIX: "https://github.com/TheSillyOk/kernel_ls_patches/raw/refs/heads/master/kpatch_fix.patch"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        variant: [aosp, miui, aosp-ksu, miui-ksu]
+        include:
+          - variant: aosp
+            patch_miui: false
+            enable_ksu: false
+          - variant: miui
+            patch_miui: true
+            enable_ksu: false
+          - variant: aosp-ksu
+            patch_miui: false
+            enable_ksu: true
+          - variant: miui-ksu
+            patch_miui: true
+            enable_ksu: true
+    steps:
+      - name: "⬢ [INIT] :: SOURCE_CHECKOUT"
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: "⚡ [RESTORE] :: CLANG_TOOLCHAIN"
+        uses: actions/cache@v4
+        with:
+          path: aosp-clang
+          key: ${{ runner.os }}-clang-${{ env.CLANG_VER }}
+          fail-on-cache-miss: true
+
+      - name: "⚡ [CACHE] :: CCACHE_ACCELERATION"
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ${{ runner.os }}-ccache-${{ matrix.variant }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-ccache-${{ matrix.variant }}-
+            ${{ runner.os }}-ccache-
+
+      - name: "⬢ [SYSTEM] :: DEPENDENCIES"
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+          bc bison build-essential ccache curl flex g++-multilib gcc-multilib \
+          git libncurses5-dev libssl-dev libxml2 libxml2-utils lzop make \
+          python3 python3-pip unzip zip zlib1g-dev
+
+      - name: "⚙️ [CONFIG] :: CCACHE_SETUP"
+        run: |
+          export PATH="/usr/lib/ccache:$PATH"
+          ccache -M 2G
+          ccache -o compression=true
+          ccache -o compression_level=1
+          ccache -z
+
+      - name: "🩹 [PATCH] :: MIUI_OPTIMIZATION"
+        if: matrix.patch_miui == true
+        run: |
+          # Inline python script for reliability over sed
+          python3 -c "
+          import os, re
+          targets = ['dsi-panel-k6-38-0c-0a-fhd-dsc-video.dtsi', 'dsi-panel-k6-38-0e-0b-fhd-dsc-video.dtsi']
+          for root, dirs, files in os.walk('.'):
+              for file in files:
+                  if file in targets:
+                      path = os.path.join(root, file)
+                      with open(path, 'r') as f: content = f.read()
+
+                      # Safe regex replacement targeting exact properties
+                      content = re.sub(r'qcom,mdss-pan-physical-width-dimension\s*=\s*<[0-9]+>;', 'qcom,mdss-pan-physical-width-dimension = <695>;', content)
+                      content = re.sub(r'qcom,mdss-pan-physical-height-dimension\s*=\s*<[0-9]+>;', 'qcom,mdss-pan-physical-height-dimension = <1546>;', content)
+
+                      with open(path, 'w') as f: f.write(content)
+                      print(f'Patched dimensions for MIUI in {path}')
+          "
+
+      - name: "⚔️ [COMPILE] :: KERNEL_BUILD"
+        run: |
+          export PATH="${{ github.workspace }}/aosp-clang/bin:$PATH"
+          export ARCH=arm64
+          export SUBARCH=arm64
+
+          make O=out ${DEFCONFIG}
+
+          make -j$(nproc --all) O=out \
+            LLVM=1 LLVM_IAS=1 CC="ccache clang" \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+            Image.gz dtbo.img dtb.img
+
+      - name: "📊 [STATS] :: CCACHE_REPORT"
+        run: ccache -s
+
+      - name: "📤 [UPLOAD] :: ARTIFACTS"
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.variant }}-unit
+          path: |
+            out/arch/arm64/boot/Image.gz
+            out/arch/arm64/boot/dtb.img
+            out/arch/arm64/boot/dtbo.img
+          compression-level: 9
+
+  # ------------------------------------------------------------------
+  # PHASE 2: DEPLOYMENT (ZIPPING & RELEASING)
+  # ------------------------------------------------------------------
+  human-instrumentality:
+    name: "🧬 PROTOCOL: FINAL_DOGMA"
+    runs-on: ubuntu-latest
+    needs: [build]
+    permissions:
+      contents: write
+
+    steps:
+      - name: "📥 [COLLECT] :: ARTIFACTS"
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifacts
+
+      - name: "📦 [PACKAGE] :: ANYKERNEL3_ZIP"
+        run: |
+          mkdir -p release_zips
+          git clone -q https://github.com/RapliVx/AnyKernel3.git -b sweet AnyKernel3
+
+          # Create Banner once
+          cat > AnyKernel3/banner << 'EOF'
+           SORY
+           QXQVYXY
+           SNRXWYXZ                         RNKJOY
+            YXYYYYYYXY                  PLOSUYXYOXNJCV
+              YXY YXYXSRV            VTV LZUKGLDDWPARAS
+                YXYYYVUUUYY        QEAAAIXPNOJCEDLTAQAR
+                  YYYVUVT YXY     WLFPSNGPNKTLJNAUIXCHV
+                    YWQYUPTSJISPLSQAAEPHGFWGLEAJPMLM
+                      TQR RPKJHFPIVQQLYMCFTBIAJYPPNP
+                        RNTSFMGHPMAAAAKUFJURFL VRXNT
+                          WUONRTOAFGQRMLTKMOOPWWTPUVQRW
+                            XWXWOAAANOLTTMJVTMWZXXYSVTU VTV
+                              PMXPVWRSUSXSSSYOTVSUYURSXYTYSY
+                              LVNTOWJCPNUMUSWMSILQYXXYZXVSXWX
+                              QLPQGJMYNJXPSSMWSVPOKRZXYY YWXTW
+                                  WUW QHSLTUVQPJNRSO YZZVTYTXU
+                                      UIKJUOMTOSULKR ZYYUXTYVW
+                                      VTMTPGSJ         XVUYVYZ
+                                      VYTRULUM         ZYWVWXZ
+                                      WUVXSROP           YWWY
+                                       YTQZLNR
+                                       PURTWU
+                                       SOXXTU
+                                        TQOSU
+                                        YXXWX
+
+           FranxxCORE // MAMBOSU PROTOCOL
+           BY RapliVX
+          EOF
+          # Process all variants in loop
+          for DIR in ./artifacts/*-unit; do
+              VARIANT=$(basename "$DIR" -unit)
+              echo "Packaging $VARIANT..."
+
+              cp -f $DIR/Image.gz AnyKernel3/
+              cp -f $DIR/dtb.img AnyKernel3/
+              cp -f $DIR/dtbo.img AnyKernel3/
+
+              cd AnyKernel3
+              # Fast zip with -1 compression for speed, we zip again at release anyway
+              zip -r1 "../release_zips/${KERNEL_NAME}-${VARIANT}-${CODENAME}-$(date +'%Y%m%d').zip" * -x .git README.md
+              cd ..
+          done
+
+      - name: "⬆️ [RELEASE] :: GITHUB_RELEASE"
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "EVA-${{ github.run_number }}"
+          name: "ProjectEVA: MAMBOSU [Run ${{ github.run_number }}]"
+          files: release_zips/*.zip
+          body: |
+            ### ⚠️ NERV SECURITY CLEARANCE REQUIRED
+            **Mission:** Kernel Instrumentality
+            **Device:** Redmi Note 10 Pro (sweet)
+            **Compiler:** Clang ${{ env.CLANG_VER }}
+
+            #### 📦 DEPLOYED UNITS:
+            | Variant | KSU | MIUI Patch |
+            | :--- | :---: | :---: |
+            | **AOSP** | ❌ | ❌ |
+            | **MIUI** | ❌ | ✅ |
+            | **AOSP-KSU** | ✅ | ❌ |
+            | **MIUI-KSU** | ✅ | ✅ |
+
+            *Synchronization Ratio: 400%*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
