@@ -3321,6 +3321,7 @@ static void __sched_fork(unsigned long clone_flags, struct task_struct *p)
 	p->last_sleep_ts		= 0;
 
 	p->se.vlag			= 0;
+	p->se.rel_deadline		= 0;
 	INIT_LIST_HEAD(&p->se.group_node);
 
 	/* A delayed task cannot be in clone(). */
