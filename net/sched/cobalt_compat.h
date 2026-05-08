@@ -123,18 +123,6 @@ static inline int skb_mac_offset(const struct sk_buff *skb)
 #define cake_maybe_unlock(sch) sch_tree_unlock(sch);
 #endif
 
-
-#if KERNEL_VERSION(4, 12, 0) > LINUX_VERSION_CODE
-static void *kvzalloc_compat(size_t sz, gfp_t flags)
-{
-	void *ptr = kzalloc(sz, flags);
-
-	if (!ptr)
-		ptr = vzalloc(sz);
-	return ptr;
-}
-#endif
-
 /* save the best till last
  * qdisc_tree_reduce_backlog appears in kernel from:
 3.16.37 onward
