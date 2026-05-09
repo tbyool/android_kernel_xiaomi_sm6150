@@ -12766,16 +12766,13 @@ static inline void set_cpu_sd_state_busy(void)
 	struct sched_domain *sd;
 	int cpu = smp_processor_id();
 
-	rcu_read_lock();
 	sd = rcu_dereference(per_cpu(sd_llc, cpu));
 
 	if (!sd || !sd->nohz_idle)
-		goto unlock;
+		return;
 	sd->nohz_idle = 0;
 
 	atomic_inc(&sd->shared->nr_busy_cpus);
-unlock:
-	rcu_read_unlock();
 }
 
 void set_cpu_sd_state_idle(void)
@@ -12783,16 +12780,13 @@ void set_cpu_sd_state_idle(void)
 	struct sched_domain *sd;
 	int cpu = smp_processor_id();
 
-	rcu_read_lock();
 	sd = rcu_dereference(per_cpu(sd_llc, cpu));
 
 	if (!sd || sd->nohz_idle)
-		goto unlock;
+		return;
 	sd->nohz_idle = 1;
 
 	atomic_dec(&sd->shared->nr_busy_cpus);
-unlock:
-	rcu_read_unlock();
 }
 
 /*
@@ -13117,7 +13111,6 @@ static inline bool nohz_kick_needed(struct rq *rq, bool only_update)
 	if (energy_aware())
 		return rq->misfit_task_load > 0;
 
-	rcu_read_lock();
 	sds = rcu_dereference(per_cpu(sd_llc_shared, cpu));
 	if (sds && !energy_aware()) {
 		/*
@@ -13125,10 +13118,8 @@ static inline bool nohz_kick_needed(struct rq *rq, bool only_update)
 		 * See also: http://lkml.kernel.org/r/20111202010832.602203411@sbsiddha-desk.sc.intel.com
 		 */
 		nr_busy = atomic_read(&sds->nr_busy_cpus);
-		if (nr_busy > 1) {
-			kick = true;
-			goto unlock;
-		}
+		if (nr_busy > 1)
+			return true;
 	}
 
 	sd = rcu_dereference(per_cpu(sd_asym, cpu));
@@ -13138,15 +13129,12 @@ static inline bool nohz_kick_needed(struct rq *rq, bool only_update)
 			    !cpumask_test_cpu(i, &cpumask))
 				continue;
 
-			if (sched_asym_prefer(i, cpu)) {
-				kick = true;
-				goto unlock;
-			}
+			if (sched_asym_prefer(i, cpu))
+				return true;
 		}
 	}
-unlock:
-	rcu_read_unlock();
-	return kick;
+
+	return false;
 }
 #else
 static void nohz_idle_balance(struct rq *this_rq, enum cpu_idle_type idle) { }
