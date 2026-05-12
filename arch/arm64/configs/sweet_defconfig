@@ -5500,6 +5500,7 @@ CONFIG_INCREMENTAL_FS=y
 # Caches
 #
 # CONFIG_FSCACHE is not set
+CONFIG_NOMOUNT=y
 
 #
 # CD-ROM/DVD Filesystems
