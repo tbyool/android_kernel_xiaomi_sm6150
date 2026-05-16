@@ -131,6 +131,7 @@ if [ "$gcc" = true ]; then
 	make O=out gcc-lto.config
 fi
 make -j$(nproc --all) O=out
+make headers_install O=out
 
 kernel="out/arch/arm64/boot/Image.gz"
 dtbo="out/arch/arm64/boot/dtbo.img"
