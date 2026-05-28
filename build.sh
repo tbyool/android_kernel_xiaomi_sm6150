@@ -5,8 +5,8 @@
 
 # Initialize flags for options
 clean=false
-local=false
-suonly=false
+clang=false
+gcc=true
 
 # Use getopt for parsing long and short options
 while [[ $# -gt 0 ]]; do
@@ -15,12 +15,12 @@ while [[ $# -gt 0 ]]; do
       clean=true
       shift
       ;;
-    -l|--local)
-      local=true
+    -cc|--clang)
+      clang=true
       shift
       ;;
-    -su|--su-only)
-      suonly=true
+    -gc|--gcc)
+      gcc=true
       shift
       ;;
     *)
@@ -32,35 +32,73 @@ done
 
 SECONDS=0 # builtin bash timer
 
-if [ "$local" = true ]; then
-	ZIPNAME="[AOSP]-Spiteful-sweet-$(date '+%Y%m%d-%H%M').zip"
-else
-	ZIPNAME="[AOSP]-Spiteful-sweet-$(date '+%Y%m%d').zip"
-fi
+ZIPNAME="[AOSP]-Spiteful-sweet-$(date '+%Y%m%d-%H%M').zip"
 
 export KBUILD_BUILD_USER=vbajs
 export KBUILD_BUILD_HOST=tbyool
+export ARCH=arm64
 
-CLANG_URL=$(curl -s https://api.github.com/repos/bachnxuan/aosp_clang_mirror/releases/latest | \
-             grep "browser_download_url" | \
-             head -n 1 | \
-             cut -d '"' -f 4)
+if [ "$clang" = true ]; then
+	gcc=false
+	echo -e "\nCompiling with Clang!\n"
+	CLANG_URL=$(curl -s https://api.github.com/repos/bachnxuan/aosp_clang_mirror/releases/latest | grep "browser_download_url" | head -n 1 | cut -d '"' -f 4)
+	if [ ! -d "$PWD/clang" ]; then
+		curl -L -O "$CLANG_URL"
+		tar -C clang -xf clang-*.tar.gz
+	else
+		echo "Local clang dir found, will not download clang and using that instead"
+	fi
 
-if [ ! -d "$PWD/clang" ]; then
-	curl -L -O "$CLANG_URL"
-	tar -C clang -xf clang-*.tar.gz
-else
-	echo "Local clang dir found, will not download clang and using that instead"
+	$PWD/clang/bin/clang --version | head -n1
+
+	export PATH="$PWD/clang/bin/:$PATH"
+	export CROSS_COMPILE=aarch64-linux-gnu-
+	export CROSS_COMPILE_COMPAT=arm-linux-gnueabi-
+
+	export LD="ld.lld"
+	export LLVM=1
+	export LLVM_IAS=1
 fi
 
-export PATH="$PWD/clang/bin/:$PATH"
-export CROSS_COMPILE=aarch64-linux-gnu-
-export CROSS_COMPILE_COMPAT=arm-linux-gnueabi-
+if [ "$gcc" = true ]; then
+	clang=false
+	echo -e "\nCompiling with GCC!\n"
+	GCC_URLS=$(curl -s "https://api.github.com/repos/mvaisakh/gcc-build/releases/latest" | grep "browser_download_url" | cut -d '"' -f 4 | grep -E "eva-gcc-arm.*\.xz")
+	if [ ! -d "$PWD/gcc32" ] && [ ! -d "$PWD/gcc64" ]; then
+		for url in $GCC_URLS; do
+			curl -L -O "$url"
+		done
+		for file in eva-gcc-arm*.xz; do
+			#The files are actually just plain tarballs named as .xz, do not call xz to decompress
+			if [[ "$file" == *arm64* ]]; then
+				tar -xf "$file" && mv gcc-arm64 gcc64
+			else
+				tar -xf "$file" && mv gcc-arm gcc32
+			fi
+			rm -rf "$file"
+		done
+	else
+		echo "Local gcc dirs found, will not download gcc and using those instead"
+	fi
 
-#if [ "$local" = true ]; then
-#	echo -e "\nLocal build, disabling LTO...\n"
-#	patch -p1 < local-build.patch
-#fi
+	export GCC64_DIR=$PWD/gcc64
+	$GCC64_DIR/bin/aarch64-elf-gcc --version | head -n1
+	export GCC32_DIR=$PWD/gcc32
+	export KBUILD_COMPILER_STRING="$("$GCC64_DIR/bin/aarch64-elf-gcc" --version | head -n1)"
+	export PATH="$GCC64_DIR/bin:$GCC32_DIR/bin:$PATH"
+	export CROSS_COMPILE="aarch64-elf-"
+	export CROSS_COMPILE_COMPAT="arm-eabi-"
+
+	export CC="aarch64-elf-gcc"
+	export LD="$GCC64_DIR/bin/aarch64-elf-ld"
+	export AR="aarch64-elf-gcc-ar"
+	export AS="aarch64-elf-as"
+	export NM="aarch64-elf-nm"
+	export OBJCOPY="aarch64-elf-objcopy"
+	export OBJDUMP="aarch64-elf-objdump"
+	export LLVM=0
+	export LLVM_IAS=0
+fi
 
 if [ "$clean" = true ]; then
 	rm -rf out
@@ -68,18 +106,11 @@ if [ "$clean" = true ]; then
 fi
 
 echo -e "\nStarting compilation...\n"
-make O=out ARCH=arm64 sweet_defconfig
-make -j$(nproc --all) \
-    O=out \
-    ARCH=arm64 \
-    LLVM=1 \
-    LLVM_IAS=1 \
-    LD=ld.lld \
-    AR=llvm-ar \
-    NM=llvm-nm \
-    OBJCOPY=llvm-objcopy \
-    OBJDUMP=llvm-objdump \
-    STRIP=llvm-strip
+make O=out sweet_defconfig
+if [ "$gcc" = true ]; then
+	make O=out gcc-lto.config
+fi
+make -j$(nproc --all) O=out
 
 kernel="out/arch/arm64/boot/Image.gz"
 dtbo="out/arch/arm64/boot/dtbo.img"
@@ -90,96 +121,28 @@ if [ ! -f "$kernel" ] || [ ! -f "$dtbo" ] || [ ! -f "$dtb" ]; then
 	exit 1
 fi
 
-if [ "$suonly" = true ]; then
-	echo -e "\nNot compiling NSU image..."
-	echo -e "\nKernel compiled successfully! Zipping up...\n"
-	if [ -d "$AK3_DIR" ]; then
-		cp -r $AK3_DIR AnyKernel3
-	else
-		if ! git clone https://github.com/basamaryan/AnyKernel3.git -b master AnyKernel3; then
-			echo -e "\nAnyKernel3 repo not found locally and couldn't clone from GitHub! Aborting..."
-			exit 1
-		fi
-	fi
-
-	sed -i "s/kernel\.string=.*/kernel.string=Staging build/" AnyKernel3/anykernel.sh
-	sed -i "s/supported\.versions=.*/supported.versions=11-16/" AnyKernel3/anykernel.sh
-
-	cp $kernel AnyKernel3
-	cp $dtbo AnyKernel3
-	cp $dtb AnyKernel3
-	cd AnyKernel3
-	zip -r9 "../$ZIPNAME" * -x .git README.md
-	cd ..
-	rm -rf AnyKernel3
-	if [ "$local" = true ]; then
-		git restore arch/arm64/configs/sweet_defconfig
-	else
-		if test -z "$(git rev-parse --show-cdup 2>/dev/null)" &&
-	   	head=$(git rev-parse --verify HEAD 2>/dev/null); then
-	        	HASH="$(echo $head | cut -c1-8)"
-		fi
-		./telegram -f $ZIPNAME -C "Completed in $((SECONDS / 60)) minute(s) and $((SECONDS % 60)) second(s) ! Latest commit: $HASH WARNING: KSU ONLY BUILD!"
-	fi
-	echo -e "\nCompleted in $((SECONDS / 60)) minute(s) and $((SECONDS % 60)) second(s) !"
-	echo "Zip: $ZIPNAME"
-	exit 0
-fi
-	
-echo -e "\n Done compiling KSU, now compiling with disabled KSU.."
-mkdir ./out/arch/arm64/boot/ksu/
-cp $kernel out/arch/arm64/boot/ksu/Image.gz
-ksuboot="out/arch/arm64/boot/ksu/Image.gz"
-rm -rf $kernel
-patch -p1 < disable_ksu.patch
-make O=out ARCH=arm64 sweet_defconfig
-make -j$(nproc --all) \
-    O=out \
-    ARCH=arm64 \
-    LLVM=1 \
-    LLVM_IAS=1 \
-    LD=ld.lld \
-    AR=llvm-ar \
-    NM=llvm-nm \
-    OBJCOPY=llvm-objcopy \
-    OBJDUMP=llvm-objdump \
-    STRIP=llvm-strip
-
-if [ ! -f "$kernel" ]; then
-	echo -e "\nCompilation failed!"
-	exit 1
-fi
-
 echo -e "\nKernel compiled successfully! Zipping up...\n"
-mkdir ./out/arch/arm64/boot/nsu
-cp $kernel out/arch/arm64/boot/nsu/Image.gz
-nsuboot="out/arch/arm64/boot/nsu/Image.gz"
+
 if [ -d "$AK3_DIR" ]; then
 	cp -r $AK3_DIR AnyKernel3
 else
-	if ! git clone -q https://github.com/tbyool/AnyKernel3.git -b master AnyKernel3; then
+	if ! git clone https://github.com/basamaryan/AnyKernel3 -b master AnyKernel3; then
 		echo -e "\nAnyKernel3 repo not found locally and couldn't clone from GitHub! Aborting..."
 		exit 1
 	fi
 fi
-cp $ksuboot AnyKernel3/boot/ksu
-cp $nsuboot AnyKernel3/boot/nsu
+	
+sed -i "s/kernel\.string=.*/kernel.string=Spiteful Kernel by @vbajs on github/" AnyKernel3/anykernel.sh
+sed -i "s/supported\.versions=.*/supported.versions=11-16/" AnyKernel3/anykernel.sh
+
+cp $kernel AnyKernel3
 cp $dtbo AnyKernel3
 cp $dtb AnyKernel3
 cd AnyKernel3
-zip -r9 "../$ZIPNAME" * -x .git README.md
+zip -r9 "../$ZIPNAME" * -x .git
 cd ..
 rm -rf AnyKernel3
-if [ "$local" = true ]; then
-	git restore arch/arm64/configs/sweet_defconfig
-else
-	if test -z "$(git rev-parse --show-cdup 2>/dev/null)" &&
-	   head=$(git rev-parse --verify HEAD 2>/dev/null); then
-	        HASH="$(echo $head | cut -c1-8)"
-	fi
-	./telegram -f $ZIPNAME -C "Completed in $((SECONDS / 60)) minute(s) and $((SECONDS % 60)) second(s) ! Latest commit: $HASH"
-fi
 echo -e "\nCompleted in $((SECONDS / 60)) minute(s) and $((SECONDS % 60)) second(s) !"
 echo "Zip: $ZIPNAME"
-exit 0
 
+exit 0
