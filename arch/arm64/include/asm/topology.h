@@ -54,6 +54,9 @@ int pcibus_to_node(struct pci_bus *bus);
 /* Define function to get the minimum frequency scaling factor */
 #define arch_scale_min_freq_capacity topology_get_min_freq_scale
 
+/* Replace task scheduler's default thermal pressure retrieve API */
+#define arch_scale_thermal_pressure topology_get_thermal_pressure
+
 #include <asm-generic/topology.h>
 
 #endif /* _ASM_ARM_TOPOLOGY_H */

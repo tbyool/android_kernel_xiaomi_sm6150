@@ -690,77 +690,29 @@ static int cpufreq_set_cur_state(struct thermal_cooling_device *cdev,
 				 unsigned long state)
 {
 	struct cpufreq_cooling_device *cpufreq_cdev = cdev->devdata;
+	struct cpumask *cpus;
+	unsigned long max_capacity, capacity;
 	unsigned int clip_freq;
-	unsigned long prev_state;
-	struct device *cpu_dev;
-	int ret = 0;
-	int cpu = 0;
 
-	/* Request state should be less than max_level */
 	if (WARN_ON(state > cpufreq_cdev->max_level))
-		state = cpufreq_cdev->max_level;
+		return cpufreq_cdev->max_level;
 
-	/* Check if the old cooling action is same as new cooling action */
 	if (cpufreq_cdev->cpufreq_state == state)
 		return 0;
 
-	mutex_lock(&core_isolate_lock);
-	cpu = (cpufreq_cdev->cpu_id == -1) ?
-		cpufreq_cdev->policy->cpu : cpufreq_cdev->cpu_id;
-	prev_state = cpufreq_cdev->cpufreq_state;
-	cpufreq_cdev->cpufreq_state = state;
-	mutex_unlock(&core_isolate_lock);
-	/* If state is the last, isolate the CPU */
-	if (state == cpufreq_cdev->max_level) {
-		if (cpu_online(cpu) &&
-			(!cpumask_test_and_set_cpu(cpu,
-			&cpus_isolated_by_thermal))) {
-			if (sched_isolate_cpu(cpu))
-				cpumask_clear_cpu(cpu,
-					&cpus_isolated_by_thermal);
-		}
-		cpumask_set_cpu(cpu, &cpus_in_max_cooling_level);
-		blocking_notifier_call_chain(&cpu_max_cooling_level_notifer,
-					     1, (void *)(long)cpu);
-		return ret;
-	} else if ((prev_state == cpufreq_cdev->max_level)
-			&& (state < cpufreq_cdev->max_level)) {
-		if (cpumask_test_and_clear_cpu(cpu, &cpus_pending_online)) {
-			cpu_dev = get_cpu_device(cpu);
-			ret = device_online(cpu_dev);
-			if (ret)
-				pr_err("CPU:%d online error:%d\n", cpu, ret);
-			goto update_frequency;
-		} else if (cpumask_test_and_clear_cpu(cpu,
-			&cpus_isolated_by_thermal)) {
-			sched_unisolate_cpu(cpu);
-		}
-		cpumask_clear_cpu(cpu, &cpus_in_max_cooling_level);
-		blocking_notifier_call_chain(&cpu_max_cooling_level_notifer,
-					     0, (void *)(long)cpu);
-	}
-update_frequency:
 	clip_freq = cpufreq_cdev->freq_table[state].frequency;
 	cpufreq_cdev->cpufreq_state = state;
 	cpufreq_cdev->clipped_freq = clip_freq;
 
-	/* Check if the device has a platform mitigation function that
-	 * can handle the CPU freq mitigation, if not, notify cpufreq
-	 * framework.
-	 */
-	if (USE_LMH_DEV && cpufreq_cdev->plat_ops) {
-		if (cpufreq_cdev->plat_ops->ceil_limit)
-			cpufreq_cdev->plat_ops->ceil_limit(cpu,
-						clip_freq);
+	cpus = cpufreq_cdev->policy->related_cpus;
+	max_capacity = arch_scale_cpu_capacity(cpumask_first(cpus));
+	capacity = clip_freq * max_capacity;
+	capacity /= cpufreq_cdev->policy->cpuinfo.max_freq;
+	arch_set_thermal_pressure(cpus, max_capacity - capacity);
 
-		get_online_cpus();
-		cpufreq_update_policy(cpu);
-		put_online_cpus();
-	} else {
-		get_online_cpus();
-		cpufreq_update_policy(cpu);
-		put_online_cpus();
-	}
+	get_online_cpus();
+	cpufreq_update_policy(cpufreq_cdev->policy->cpu);
+	put_online_cpus();
 
 	return 0;
 }
