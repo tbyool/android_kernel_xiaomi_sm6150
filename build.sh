@@ -5,8 +5,8 @@
 
 # Initialize flags for options
 clean=false
-clang=false
-gcc=true
+clang=true
+gcc=flase
 
 # Use getopt for parsing long and short options
 while [[ $# -gt 0 ]]; do
