@@ -9591,7 +9591,7 @@ static void check_preempt_wakeup(struct rq *rq, struct task_struct *p, int wake_
 	 * there is shared data as exec often follow fork.
 	 */
 	if (wake_flags & WF_FORK)
-		return;
+		goto update;
 
 	/* Prefer picking wakee soon if appropriate. */
 	if (sched_feat(NEXT_BUDDY) && set_preempt_buddy(cfs_rq, pse)) {
@@ -9641,7 +9641,7 @@ pick:
 	 */
 	if (do_preempt_short && entity_eligible(cfs_rq, pse))
 		goto preempt;
-
+update:
 	if (sched_feat(RUN_TO_PARITY))
 		update_protect_slice(cfs_rq, se);
 
