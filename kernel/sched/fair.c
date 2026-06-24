@@ -9635,16 +9635,23 @@ pick:
 	if (!nse && cfs_rq->nr_queued)
 		goto pick;
 
-	if (sched_feat(RUN_TO_PARITY) && do_preempt_short)
+	/*
+	 * If @p is eligible but not the next task to run then cancel protection
+	 * to prevent large scheduling latency
+	 */
+	if (do_preempt_short && entity_eligible(cfs_rq, pse))
+		goto preempt;
+
+	if (sched_feat(RUN_TO_PARITY))
 		update_protect_slice(cfs_rq, se);
 
 	return;
 
 preempt:
-        if (do_preempt_short) {
-		cancel_protect_slice(se);
+	cancel_protect_slice(se);
+
+	if (do_preempt_short)
 		set_short_buddy(cfs_rq, pse);
-	}
 
 	resched_curr(rq);
 }
