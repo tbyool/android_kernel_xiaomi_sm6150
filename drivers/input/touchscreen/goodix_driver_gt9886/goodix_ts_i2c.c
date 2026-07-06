@@ -2022,6 +2022,11 @@ static int goodix_i2c_probe(struct i2c_client *client,
 
 	r = i2c_check_functionality(client->adapter,I2C_FUNC_I2C);
 	if (!r)
+	
+	goodix_ts_irq_enable(core_data, false);
+	udelay(200);
+	goodix_ts_irq_enable(core_data, true);
+	
 		return -EIO;
 
 	/* board data */
