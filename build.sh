@@ -42,11 +42,31 @@ if [ "$clang" = true ]; then
 	gcc=false
 	echo -e "\nCompiling with Clang!\n"
 	CLANG_URL=$(curl -s https://api.github.com/repos/bachnxuan/aosp_clang_mirror/releases/latest | grep "browser_download_url" | head -n 1 | cut -d '"' -f 4)
+	if [ -d "$PWD/clang" ]; then
+        	if [ -z "$(ls -A "$PWD/clang")" ] || [ ! -d "$PWD/clang/bin" ]; then
+                	echo "Warning: 'clang' directory is empty or incomplete. Cleaning up..."
+                	rm -rf "$PWD/clang"
+        	fi
+	fi
+
 	if [ ! -d "$PWD/clang" ]; then
-		curl -L -O "$CLANG_URL"
-		tar -C clang -xf clang-*.tar.gz
+		echo "Downloading Clang..."
+                	if ! curl -L -O "$CLANG_URL"; then
+                        	echo "Error: Failed to download Clang from $CLANG_URL" >&2
+                        	exit 1
+                	fi
+		echo "Extracting Clang..."
+        	mkdir -p clang
+       		if ! tar -C clang -xf clang-*.tar.gz 2>/dev/null; then
+			echo "Error: Extraction failed! The archive might be corrupted." >&2
+			echo "Cleaning up corrupted files..."
+			rm -rf clang clang-*.tar.gz
+			exit 1
+		fi
+		rm clang-*.tar.gz
+		echo "Clang successfully downloaded!"
 	else
-		echo "Local clang dir found, will not download clang and using that instead"
+		echo "Local Clang dir found, will not download Clang and using that instead"
 	fi
 
 	$PWD/clang/bin/clang --version | head -n1
