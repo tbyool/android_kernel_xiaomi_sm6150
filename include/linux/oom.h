@@ -93,7 +93,7 @@ static inline bool mm_is_oom_victim(struct mm_struct *mm)
  *
  * Return 0 when the PF is safe VM_FAULT_SIGBUS otherwise.
  */
-static inline int check_stable_address_space(struct mm_struct *mm)
+static inline vm_fault_t check_stable_address_space(struct mm_struct *mm)
 {
 	if (unlikely(test_bit(MMF_UNSTABLE, &mm->flags)))
 		return VM_FAULT_SIGBUS;
@@ -132,16 +132,9 @@ extern void oom_killer_enable(void);
 extern struct task_struct *find_lock_task_mm(struct task_struct *p);
 
 extern void dump_tasks(struct mem_cgroup *memcg,
-		const nodemask_t *nodemask);
-
-extern void wake_oom_reaper(struct task_struct *tsk);
-
+		       const nodemask_t *nodemask);
 /* sysctls */
 extern int sysctl_oom_dump_tasks;
 extern int sysctl_oom_kill_allocating_task;
 extern int sysctl_panic_on_oom;
-extern int sysctl_reap_mem_on_sigkill;
-
-/* calls for LMK reaper */
-extern void add_to_oom_reaper(struct task_struct *p);
 #endif /* _INCLUDE_LINUX_OOM_H */
