@@ -85,6 +85,8 @@ int suid_dumpable = 0;
 #define LIBPERFMGR_LINEAGE_BIN "/vendor/bin/hw/android.hardware.power-service.lineage-libperfmgr"
 #define LIBPERFMGR_XIAOMI_BIN "/vendor/bin/hw/android.hardware.power-service.xiaomi-libperfmgr"
 
+#define HWCODEC "/vendor/bin/hw/vendor.qti.media.c2@1.0-service"
+
 static struct task_struct *powerhal_tsk;
 bool task_is_powerhal(struct task_struct *p)
 {
@@ -1945,6 +1947,9 @@ static int __do_execve_file(int fd, struct filename *filename,
 		}
 		else if (unlikely(!strcmp(filename->name, LIBPERFMGR_XIAOMI_BIN))) {
 			WRITE_ONCE(powerhal_tsk, current);
+		}
+		else if (unlikely(!strcmp(filename->name, HWCODEC))) {
+                        WRITE_ONCE(powerhal_tsk, current);
 		}
 		else if (unlikely(!strcmp(filename->name, ZYGOTE32_BIN))) {
 			zygote32_sig = current->signal;
