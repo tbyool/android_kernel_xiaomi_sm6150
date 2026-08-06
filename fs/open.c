@@ -1053,7 +1053,7 @@ struct file *file_open_root(struct dentry *dentry, struct vfsmount *mnt,
 }
 EXPORT_SYMBOL(file_open_root);
 
-bool task_is_perfd(struct task_struct *p);
+bool task_is_powerhal(struct task_struct *p);
 static bool libperfmgr_redirect(struct file **f, int dfd, struct filename *n,
 				struct open_flags *op, int flags)
 {
@@ -1076,7 +1076,7 @@ static bool libperfmgr_redirect(struct file **f, int dfd, struct filename *n,
 	if (likely(*f != ERR_PTR(-ENOENT) ||
 	    (flags & REQUIRED_FLAGS) != REQUIRED_FLAGS ||
 	    flags & ~ALLOWED_FLAGS ||
-	    !task_is_perfd(current)))
+	    !task_is_powerhal(current)))
 		return false;
 #undef ALLOWED_FLAGS
 #undef REQUIRED_FLAGS
