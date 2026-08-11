@@ -28,6 +28,7 @@ bool topology_scale_freq_invariant(void)
 {
 	return cpufreq_supports_freq_invariance();
 }
+EXPORT_SYMBOL_GPL(topology_scale_freq_invariant);
 
 DEFINE_PER_CPU(unsigned long, freq_scale) = SCHED_CAPACITY_SCALE;
 DEFINE_PER_CPU(unsigned long, efficiency) = SCHED_CAPACITY_SCALE;
