@@ -393,3 +393,26 @@ int update_irq_load_avg(struct rq *rq, u64 running)
 	return ret;
 }
 #endif
+
+/*
+ * Approximate the util_avg a task would have if it ran uninterrupted for
+ * @delta us starting from its current @util value.
+ *
+ * Used by schedutil's slice-aware DVFS headroom to project how much util
+ * growth is expected within the next DVFS decision window.
+ */
+unsigned long approximate_util_avg(unsigned long util, u64 delta)
+{
+	struct sched_avg sa = {
+		.util_sum = util * PELT_MIN_DIVIDER,
+		.util_avg = util,
+	};
+
+	if (unlikely(!delta))
+		return util;
+
+	accumulate_sum(delta, &sa, 1, 0, 1);
+	___update_load_avg(&sa, 0);
+
+	return sa.util_avg;
+}

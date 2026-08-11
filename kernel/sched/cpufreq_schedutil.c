@@ -11,6 +11,7 @@
 #include <uapi/linux/sched/types.h>
 
 #include "sched.h"
+#include "pelt.h"
 
 #define IOWAIT_BOOST_MIN	(SCHED_CAPACITY_SCALE / 8)
 
@@ -42,7 +43,7 @@ struct sugov_policy {
 	bool			limits_changed;
 	bool			need_freq_update;
 
-	unsigned long		dvfs_capacity;
+	u64			dvfs_headroom_lut_delay;
 	u16			dvfs_headroom_lut[SCHED_CAPACITY_SCALE + 1];
 };
 
@@ -241,37 +242,83 @@ static unsigned int get_next_freq(struct sugov_policy *sg_policy,
 	return l_freq;
 }
 
-static inline unsigned long sugov_apply_dvfs_headroom(unsigned long util,
-						      unsigned long capacity,
-						      unsigned long threshold)
+#define SUGOV_RATE_LIMIT_US	2000ULL
+#ifdef CONFIG_HZ_1000
+#define SUGOV_DELAY_US		SUGOV_RATE_LIMIT_US
+#else
+#define SUGOV_DELAY_US		TICK_USEC
+#endif
+
+/*
+ * Slice-aware DVFS headroom
+ *
+ * DVFS decisions are made at discrete points. If the CPU stays busy, util
+ * will continue growing before the next decision, so we add headroom to
+ * pre-emptively target a higher OPP. The headroom is H_ideal = (C-util)*alpha
+ * where alpha = approximate_util_avg(0, delay) / 1024.
+ *
+ * When multiple tasks compete (h_nr_queued > 1), we use the current task's
+ * remaining EEVDF slice as the projection window instead of a full tick.
+ * prevent overshooting frequency for tasks that will be preempted soon.
+ */
+static inline unsigned long sugov_apply_dvfs_headroom(unsigned long util, int cpu)
 {
-	unsigned long delta, headroom;
-	unsigned long capped_util = min(util, capacity);
-	unsigned long delta_t = (capacity * 220) >> 10;
-
-	delta = capacity - capped_util;
-
-	headroom = min((delta_t * capped_util) / threshold,
-			(delta_t * delta) / (capacity - threshold));
-
-	return capped_util + headroom;
-}
-
-
-static inline unsigned long apply_dvfs_headroom(unsigned long util, int cpu)
-{
+	struct rq *rq = cpu_rq(cpu);
 	struct sugov_cpu *sg_cpu = &per_cpu(sugov_cpu, cpu);
+	struct sugov_policy *sg_policy = sg_cpu->sg_policy;
+	unsigned long cap, approx, h_max, growth, decay;
+	u64 delay;
 
-	util = min_t(unsigned long, util, SCHED_CAPACITY_SCALE);
-	return sg_cpu->dvfs_headroom_lut[util];
+	if (!util)
+		return 0;
+
+	/*
+	 * Estimate worst-case delay to the next util_avg update:
+	 * - Single task: full tick (util will keep growing uninterrupted).
+	 * - Multiple tasks: min(remaining EEVDF slice, tick) — the CPU will
+	 *   be preempted sooner, so projecting a full tick would overshoot.
+	 */
+	if (rq->cfs.h_nr_queued > 1) {
+		delay = min_t(u64, rq->curr->se.slice / 1000, TICK_USEC);
+		delay = max(delay, SUGOV_RATE_LIMIT_US);
+	} else {
+		delay = TICK_USEC;
+#ifdef CONFIG_HZ_1000
+		delay = max(delay, SUGOV_RATE_LIMIT_US);
+#endif
+	}
+
+	/* Fast path: delay matches precomputed LUT */
+	if (likely(delay == sg_policy->dvfs_headroom_lut_delay)) {
+		approx = sg_policy->dvfs_headroom_lut[util];
+		h_max  = sg_policy->dvfs_headroom_lut[0];
+	} else {
+		approx = approximate_util_avg(util, delay);
+		h_max  = approximate_util_avg(0, delay);
+	}
+
+	/*
+	 * H_ideal = (C - util) * alpha, rewritten to avoid division:
+	 *   growth = h_max * C / 1024   (= C * alpha)
+	 *   decay  = h_max + util - approx  (= util * alpha)
+	 *   headroom = growth - decay
+	 */
+	cap    = arch_scale_cpu_capacity(cpu);
+	growth = mult_frac(h_max, cap, SCHED_CAPACITY_SCALE);
+	decay  = h_max + util - approx;
+
+	if (growth > decay)
+		return util + growth - decay;
+
+	return util;
 }
 
 unsigned long sugov_effective_cpu_perf(int cpu, unsigned long actual,
 				 unsigned long min,
 				 unsigned long max)
 {
-	/* Add dvfs headroom to actual utilization */
-	actual = apply_dvfs_headroom(actual, cpu);
+	/* Add slice-aware PELT DVFS headroom */
+	actual = sugov_apply_dvfs_headroom(actual, cpu);
 	/* Actually we don't need to target the max performance */
 	if (actual < max)
 		max = actual;
@@ -647,21 +694,16 @@ static struct cpufreq_governor schedutil_gov;
 
 static void sugov_build_dvfs_headroom_lut(struct sugov_policy *sg_policy)
 {
-	struct cpufreq_policy *policy = sg_policy->policy;
-	unsigned long capacity = capacity_orig_of(policy->cpu);
-	unsigned long threshold;
-	unsigned long util;
+	unsigned int i;
+	u64 delay;
 
-	if (sg_policy->dvfs_capacity == capacity)
-		return;
+	delay = SUGOV_DELAY_US;
 
-	sg_policy->dvfs_capacity = capacity;
+	sg_policy->dvfs_headroom_lut_delay = delay;
 
-	threshold = (capacity * 15) / 100;
-
-	for (util = 0; util <= SCHED_CAPACITY_SCALE; util++)
-		sg_policy->dvfs_headroom_lut[util] =
-			sugov_apply_dvfs_headroom(util, capacity, threshold);
+	for (i = 0; i <= SCHED_CAPACITY_SCALE; i++)
+		sg_policy->dvfs_headroom_lut[i] =
+			(u16)approximate_util_avg(i, delay);
 }
 
 static struct sugov_policy *sugov_policy_alloc(struct cpufreq_policy *policy)
