@@ -113,6 +113,7 @@ menu "Caches"
 source "fs/fscache/Kconfig"
 source "fs/cachefiles/Kconfig"
 
+source "fs/nomount/Kconfig"
 endmenu
 
 if BLOCK
@@ -121,6 +122,7 @@ menu "CD-ROM/DVD Filesystems"
 source "fs/isofs/Kconfig"
 source "fs/udf/Kconfig"
 
+source "fs/nomount/Kconfig"
 endmenu
 endif # BLOCK
 
@@ -131,6 +133,7 @@ source "fs/fat/Kconfig"
 source "fs/exfat/Kconfig"
 source "fs/ntfs/Kconfig"
 
+source "fs/nomount/Kconfig"
 endmenu
 endif # BLOCK
 
@@ -210,6 +213,7 @@ config ARCH_HAS_GIGANTIC_PAGE
 source "fs/configfs/Kconfig"
 source "fs/efivarfs/Kconfig"
 
+source "fs/nomount/Kconfig"
 endmenu
 
 menuconfig MISC_FILESYSTEMS
@@ -320,4 +324,5 @@ config FILE_TABLE_DEBUG
 	help
 	  This option enables debug of the open files using a global filetable
 
+source "fs/nomount/Kconfig"
 endmenu
