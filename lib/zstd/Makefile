@@ -12,6 +12,8 @@ obj-$(CONFIG_ZSTD_COMPRESS) += zstd_compress.o
 obj-$(CONFIG_ZSTD_DECOMPRESS) += zstd_decompress.o
 obj-$(CONFIG_ZSTD_COMMON) += zstd_common.o
 
+ccflags-y += -O3 -funroll-loops
+
 ccflags-y += -Wno-error=deprecated-declarations
 ldflags-y += --allow-multiple-definition
 
