@@ -7739,7 +7739,7 @@ void __init sched_init(void)
 		rq->rd = NULL;
 		rq->cpu_capacity = rq->cpu_capacity_orig = SCHED_CAPACITY_SCALE;
 		rq->fits_capacity_threshold = SCHED_CAPACITY_SCALE;
-		rq->balance_callback = &balance_push_callback;
+		rq->balance_callback = NULL;
 		rq->active_balance = 0;
 		rq->next_balance = jiffies;
 		rq->push_cpu = 0;
