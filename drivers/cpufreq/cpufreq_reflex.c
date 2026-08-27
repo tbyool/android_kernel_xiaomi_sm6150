@@ -810,7 +810,6 @@ static struct attribute *rfx_attrs[] = {
 	&hispeed_filter_shift.attr,
 	NULL
 };
-ATTRIBUTE_GROUPS(rfx);
 
 static void rfx_tunables_free(struct kobject *kobj)
 {

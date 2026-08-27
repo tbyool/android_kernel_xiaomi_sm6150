@@ -19,6 +19,8 @@
 #define SCHED_CPUFREQ_CONTINUE (1U << 8)
 
 #ifdef CONFIG_CPU_FREQ
+struct cpufreq_policy;
+
 struct update_util_data {
        void (*func)(struct update_util_data *data, u64 time, unsigned int flags);
 };
