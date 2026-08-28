@@ -139,7 +139,7 @@ else
 fi
 	
 sed -i "s/kernel\.string=.*/kernel.string=Spiteful Kernel by @vbajs on github/" AnyKernel3/anykernel.sh
-sed -i "s/supported\.versions=.*/supported.versions=11-16/" AnyKernel3/anykernel.sh
+sed -i "s/supported\.versions=.*/supported.versions=11-17/" AnyKernel3/anykernel.sh
 
 cp $kernel AnyKernel3
 cp $dtbo AnyKernel3
