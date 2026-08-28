@@ -5,8 +5,8 @@
 
 # Initialize flags for options
 clean=false
-clang=true
-gcc=flase
+clang=false
+gcc=false
 
 # Use getopt for parsing long and short options
 while [[ $# -gt 0 ]]; do
@@ -38,11 +38,17 @@ export KBUILD_BUILD_USER=vbajs
 export KBUILD_BUILD_HOST=tbyool
 export ARCH=arm64
 
+# For if neither compiler options are passed, default to clang
+if [ "$clang" = false ] && [ "$gcc" = false ]; then
+	clang=true
+fi
+
 if [ "$clang" = true ]; then
 	gcc=false
 	echo -e "\nCompiling with Clang!\n"
 	CLANG_URL=$(curl -s https://api.github.com/repos/bachnxuan/aosp_clang_mirror/releases/latest | grep "browser_download_url" | head -n 1 | cut -d '"' -f 4)
 	if [ ! -d "$PWD/clang" ]; then
+		mkdir clang
 		curl -L -O "$CLANG_URL"
 		tar -C clang -xf clang-*.tar.gz
 	else
