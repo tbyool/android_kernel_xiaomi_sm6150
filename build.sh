@@ -45,12 +45,22 @@ fi
 
 if [ "$clang" = true ]; then
 	gcc=false
-	echo -e "\nCompiling with Clang!\n"
-	CLANG_URL=$(curl -s https://api.github.com/repos/bachnxuan/aosp_clang_mirror/releases/latest | grep "browser_download_url" | head -n 1 | cut -d '"' -f 4)
+	if [ "$NEUTRON" = "1" ] || [ "${NEUTRON,,}" = "true" ]; then
+		echo -e "\nCompiling with Neutron Clang!\n"
+		CLANG_URL=$(curl -s https://api.github.com/repos/Neutron-Toolchains/clang-build-catalogue/releases/latest | grep "browser_download_url" | head -n 1 | cut -d '"' -f 4)
+	else
+		echo -e "\nCompiling with AOSP Clang!\n"
+		CLANG_URL=$(curl -s https://api.github.com/repos/bachnxuan/aosp_clang_mirror/releases/latest | grep "browser_download_url" | head -n 1 | cut -d '"' -f 4)
+	fi
+
 	if [ ! -d "$PWD/clang" ]; then
 		mkdir clang
 		curl -L -O "$CLANG_URL"
-		tar -C clang -xf clang-*.tar.gz
+		if [ "$NEUTRON" = "1" ] || [ "${NEUTRON,,}" = "true" ]; then
+			tar -C clang -xf neutron-clang-*.tar.zst
+		else
+			tar -C clang -xf clang-*.tar.gz
+		fi
 	else
 		echo "Local clang dir found, will not download clang and using that instead"
 	fi
