@@ -35,6 +35,10 @@
  * found on the VFS inode structure.  This is the default if no getattr inode
  * operation is supplied.
  */
+#ifdef CONFIG_KSU_SUSFS_SUS_KSTAT
+extern void susfs_sus_kstat_spoof_generic_fillattr(struct inode *inode, struct kstat *stat);
+#endif
+
 void generic_fillattr(struct inode *inode, struct kstat *stat)
 {
 	stat->dev = inode->i_sb->s_dev;
@@ -75,6 +79,10 @@ int vfs_getattr_nosec(const struct path *path, struct kstat *stat,
 	stat->result_mask |= STATX_BASIC_STATS;
 	query_flags &= KSTAT_QUERY_FLAGS;
 
+#ifdef CONFIG_KSU_SUSFS_SUS_KSTAT
+	susfs_sus_kstat_spoof_generic_fillattr(inode, stat);
+#endif
+
 	/* allow the fs to override these if it really wants to */
 	if (IS_NOATIME(inode))
 		stat->result_mask &= ~STATX_ATIME;
@@ -85,8 +93,18 @@ int vfs_getattr_nosec(const struct path *path, struct kstat *stat,
 		stat->attributes |= STATX_ATTR_DAX;
 
 	if (inode->i_op->getattr)
+#ifdef CONFIG_KSU_SUSFS_SUS_KSTAT
+	{
+		int err = inode->i_op->getattr(path, stat, request_mask,
+					    query_flags);
+		if (!err)
+			susfs_sus_kstat_spoof_generic_fillattr(inode, stat);
+		return err;
+	}
+#else
 		return inode->i_op->getattr(path, stat, request_mask,
 					    query_flags);
+#endif
 
 	generic_fillattr(inode, stat);
 	return 0;
