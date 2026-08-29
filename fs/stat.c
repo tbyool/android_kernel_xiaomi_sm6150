@@ -20,6 +20,9 @@
 
 #include <linux/uaccess.h>
 #include <asm/unistd.h>
+#ifdef CONFIG_KSU_SUSFS
+#include <linux/susfs_def.h>
+#endif
 
 #include "mount.h"
 
@@ -135,6 +138,11 @@ EXPORT_SYMBOL(vfs_getattr);
  *
  * 0 will be returned on success, and a -ve error code if unsuccessful.
  */
+#ifdef CONFIG_KSU_SUSFS
+extern struct static_key_true ksu_is_init_rc_hook_enabled;
+extern void ksu_handle_vfs_fstat(int fd, loff_t *kstat_size_ptr);
+#endif // #ifdef CONFIG_KSU_SUSFS
+
 int vfs_statx_fd(unsigned int fd, struct kstat *stat,
 		 u32 request_mask, unsigned int query_flags)
 {
@@ -148,6 +156,11 @@ int vfs_statx_fd(unsigned int fd, struct kstat *stat,
 	if (f.file) {
 		error = vfs_getattr(&f.file->f_path, stat,
 				    request_mask, query_flags);
+#ifdef CONFIG_KSU_SUSFS
+		if (static_branch_unlikely(&ksu_is_init_rc_hook_enabled))
+			ksu_handle_vfs_fstat(fd, &stat->size);
+#endif // #ifdef CONFIG_KSU_SUSFS
+
 		fdput(f);
 	}
 	return error;
@@ -169,12 +182,24 @@ EXPORT_SYMBOL(vfs_statx_fd);
  *
  * 0 will be returned on success, and a -ve error code if unsuccessful.
  */
+#ifdef CONFIG_KSU_SUSFS
+extern struct static_key_true ksu_su_compat_enabled;
+extern bool __ksu_is_allow_uid_for_current(uid_t uid);
+extern int ksu_handle_stat(int *dfd, struct filename **filename, int *flags);
+extern int filename_lookup(int dfd, struct filename *name, unsigned flags,
+				struct path *path, struct path *root);
+#endif
+
 int vfs_statx(int dfd, const char __user *filename, int flags,
 	      struct kstat *stat, u32 request_mask)
 {
 	struct path path;
 	int error = -EINVAL;
 	unsigned int lookup_flags = LOOKUP_FOLLOW | LOOKUP_AUTOMOUNT;
+
+#ifdef CONFIG_KSU_SUSFS
+	struct filename *fname = NULL;
+#endif
 
 	if ((flags & ~(AT_SYMLINK_NOFOLLOW | AT_NO_AUTOMOUNT |
 		       AT_EMPTY_PATH | KSTAT_QUERY_FLAGS)) != 0)
@@ -188,7 +213,23 @@ int vfs_statx(int dfd, const char __user *filename, int flags,
 		lookup_flags |= LOOKUP_EMPTY;
 
 retry:
+#ifdef CONFIG_KSU_SUSFS
+	fname = getname_flags(filename, lookup_flags, NULL);
+
+	if (likely(susfs_is_current_proc_no_su()))
+		goto orig_flow;
+
+	if (static_branch_likely(&ksu_su_compat_enabled)) {
+		if (unlikely(__ksu_is_allow_uid_for_current(current_uid().val)))
+			ksu_handle_stat(&dfd, &fname, &flags);
+	}
+
+orig_flow:
+	error = filename_lookup(dfd, fname, lookup_flags, &path, NULL);
+	// no putname(fname) here as filename_lookup() has it done for us already;
+#else
 	error = user_path_at(dfd, filename, lookup_flags, &path);
+#endif
 	if (error)
 		goto out;
 
