@@ -149,7 +149,7 @@
  */
 #define SCHED_FEAT_EAS_PREFER_IDLE 0
 #define SCHED_FEAT_FIND_BEST_TARGET 0
-#define SCHED_FEAT_FBT_STRICT_ORDER 1
+#define SCHED_FEAT_FBT_STRICT_ORDER 0
 
 /*
  * Apply schedtune boost hold to tasks of all sched classes.
