@@ -4547,7 +4547,7 @@ static inline void util_est_update(struct sched_entity *se)
 	 * To avoid underestimate of task utilization, skip updates of EWMA if
 	 * we cannot grant that thread got all CPU time it wanted.
 	 */
-	if ((dequeued + UTIL_EST_MARGIN) < READ_ONCE(se->avg.runnable_avg))
+	if ((dequeued + UTIL_EST_MARGIN) < READ_ONCE(se->avg.runnable_load_avg))
 		goto done;
 
 	/*
@@ -4753,7 +4753,7 @@ static inline bool cpu_is_in_target_set(struct task_struct *p, int cpu)
 		first_cpu = rd->min_cap_orig_cpu;
 	}
 
-	next_usable_cpu = cpumask_next(first_cpu - 1, &p->cpus_allowed);
+	next_usable_cpu = cpumask_next(first_cpu - 1, p->cpus_ptr);
 	return cpu >= next_usable_cpu || next_usable_cpu >= nr_cpu_ids;
 }
 #endif
@@ -4761,7 +4761,7 @@ static inline bool cpu_is_in_target_set(struct task_struct *p, int cpu)
 static inline bool
 bias_to_this_cpu(struct task_struct *p, int cpu, int start_cpu)
 {
-	bool base_test = cpumask_test_cpu(cpu, &p->cpus_allowed) &&
+	bool base_test = cpumask_test_cpu(cpu, p->cpus_ptr) &&
 #ifdef CONFIG_SCHED_WALT
 			cpu_active(cpu) && cpu_is_in_target_set(p, cpu);
 #else
@@ -9201,18 +9201,6 @@ static int wake_cap(struct task_struct *p, int cpu, int prev_cpu)
 	/* Minimum capacity is close to max, no need to abort wake_affine */
 	if (max_cap - min_cap < max_cap >> 3)
 		return 0;
-
-	if (sched_feat(UTIL_EST)) {
-		util_est = READ_ONCE(cfs_rq->avg.util_est);
-
-		/*
-		 * During wake-up, the task isn't enqueued yet and doesn't
-		 * appear in the cfs_rq->avg.util_est of any rq,
-		 * so just add it (if needed) to "simulate" what will be
-		 * cpu_util() after the task has been enqueued.
-		 */
-		if (dst_cpu == cpu)
-			util_est += _task_util_est(p);
 
 	/* Bring task utilization in sync with prev_cpu */
 	sync_entity_load_avg(&p->se);

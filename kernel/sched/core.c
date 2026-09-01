@@ -3581,7 +3581,6 @@ void sched_cgroup_fork(struct task_struct *p)
 		p->sched_task_group = tg;
 	}
 #endif
-	rseq_migrate(p);
 	/*
 	 * We're setting the CPU for the first time, we don't migrate,
 	 * so use __set_task_cpu().
