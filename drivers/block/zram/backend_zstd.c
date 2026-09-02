@@ -66,6 +66,27 @@ static int zstd_setup_params(struct zcomp_params *params)
 	zp->custom_mem.customAlloc = zstd_custom_alloc;
 	zp->custom_mem.customFree = zstd_custom_free;
 
+	/*
+	 * Nothing to build a dictionary from, and nothing that would read
+	 * one: create_ctx, compress and decompress all branch on dict_sz
+	 * and use zp->cprm with a plain context when it is zero, so a cdict
+	 * and a ddict built here would be freed unread.
+	 *
+	 * Building them is not free either.  A cdict keeps its match state
+	 * in a single allocation - at level 3 over a page sized source that
+	 * is a 32768 entry hash table, a chain table and the huffman
+	 * workspace, about 160 KiB - and it comes from zstd_custom_alloc(),
+	 * whose GFP_NOIO stops kvzalloc() short of its vmalloc fallback,
+	 * because kvmalloc_node() hands anything that is not a GFP_KERNEL
+	 * superset straight to kmalloc.  The request therefore reaches the
+	 * page allocator asking for order 6 contiguous pages, a fragmented
+	 * machine cannot serve that, __GFP_NOWARN keeps the failure quiet,
+	 * and the NULL arrives here as -EINVAL: a plain zstd device
+	 * refusing disksize over an object it was never going to use.
+	 */
+	if (!params->dict_sz)
+		return 0;
+
 	prm = zstd_get_cparams(params->level, PAGE_SIZE,
 			       params->dict_sz);
 
