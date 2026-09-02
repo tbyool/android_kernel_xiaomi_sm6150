@@ -412,7 +412,7 @@ unsigned long approximate_util_avg(unsigned long util, u64 delta)
 		return util;
 
 	accumulate_sum(delta, &sa, 1, 0, 1);
-	___update_load_avg(&sa, 0);
+	___update_load_avg(&sa, 0, 0);
 
 	return sa.util_avg;
 }
