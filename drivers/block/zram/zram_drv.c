@@ -69,13 +69,19 @@ static int __maybe_unused one = 1;
 static int __maybe_unused three = 3;
 u8 __read_mostly sysctl_zram_recomp_immediate = 1;
 
+static int zram_proc_dou8vec_minmax(struct ctl_table *table, int write,
+				    void *buffer, size_t *lenp, loff_t *ppos)
+{
+	return proc_dou8vec_minmax(table, write, buffer, lenp, ppos);
+}
+
 static struct ctl_table zram_sysctl_table[] = {
 	{
 		.procname	= "zram_recomp_immediate",
 		.data		= &sysctl_zram_recomp_immediate,
 		.maxlen		= sizeof(u8),
 		.mode		= 0644,
-		.proc_handler	= proc_dou8vec_minmax,
+		.proc_handler	= zram_proc_dou8vec_minmax,
 		.extra1		= &one,
 		.extra2		= &three,
 	},
