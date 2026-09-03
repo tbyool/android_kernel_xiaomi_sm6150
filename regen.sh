@@ -4,6 +4,9 @@
 #devices=("sweet" "courbet" "tucana" "toco" "phoenix" "davinci")
 devices=("sweet")
 
+export LLVM_IAS=0
+export LLVM=0
+
 # Loop through the devices
 for device in "${devices[@]}"
 do
