@@ -15,6 +15,7 @@
 #include <linux/ratelimit.h>
 #include <linux/sched/mm.h>
 #include <linux/sort.h>
+#include <linux/vmpressure.h>
 #include <uapi/linux/sched/types.h>
 
 /* The minimum number of pages to free per reclaim */
@@ -471,14 +472,26 @@ void simple_lmk_mm_freed(struct mm_struct *mm)
 	read_unlock(&mm_free_lock);
 }
 
-void simple_lmk_reclaim_needed(void)
+static unsigned short slmk_vmpressure __read_mostly = 95;
+module_param(slmk_vmpressure, short, 0644);
+
+static int simple_lmk_vmpressure_cb(struct notifier_block *nb,
+				    unsigned long pressure, void *data)
 {
-	atomic_set(&needs_reclaim, 1);
-	smp_mb__after_atomic();
-	if (waitqueue_active(&oom_waitq))
-	wake_up(&oom_waitq);
+	if (pressure >= slmk_vmpressure) {
+		atomic_set(&needs_reclaim, 1);
+		smp_mb__after_atomic();
+		if (waitqueue_active(&oom_waitq))
+			wake_up(&oom_waitq);
+	}
+
+	return NOTIFY_OK;
 }
-EXPORT_SYMBOL_GPL(simple_lmk_reclaim_needed);
+
+static struct notifier_block vmpressure_notif = {
+	.notifier_call = simple_lmk_vmpressure_cb,
+	.priority = INT_MAX
+};
 
 /* Initialize Simple LMK when lmkd in Android writes to the minfree parameter */
 static int simple_lmk_init_set(const char *val, const struct kernel_param *kp)
@@ -494,6 +507,7 @@ static int simple_lmk_init_set(const char *val, const struct kernel_param *kp)
 		thread = kthread_run(simple_lmk_reclaim_thread, NULL,
 				     "simple_lmkd");
 		BUG_ON(IS_ERR(thread));
+		BUG_ON(vmpressure_notifier_register(&vmpressure_notif));
 	}
 
 	si_meminfo(&i);
