@@ -743,10 +743,6 @@ static ssize_t show_cpuinfo_cur_freq(struct cpufreq_policy *policy,
 	return sprintf(buf, "<unknown>\n");
 }
 
-#ifdef CONFIG_KPROFILES
-extern int kp_active_mode(void);
-#endif
-
 /**
  * show_scaling_governor - show the current policy for the specified CPU
  */
@@ -756,10 +752,6 @@ static ssize_t show_scaling_governor(struct cpufreq_policy *policy, char *buf)
 		return sprintf(buf, "powersave\n");
 	else if (policy->policy == CPUFREQ_POLICY_PERFORMANCE)
 		return sprintf(buf, "performance\n");
-#ifdef CONFIG_KPROFILES
-	else if (kp_active_mode() == 1)
-		return sprintf(buf, "powersave\n");
-#endif
 	else if (policy->governor)
 		return scnprintf(buf, CPUFREQ_NAME_PLEN, "%s\n",
 				policy->governor->name);
