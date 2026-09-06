@@ -87,18 +87,40 @@ int suid_dumpable = 0;
 
 #define HWCODEC "/vendor/bin/hw/vendor.qti.media.c2@1.0-service"
 
-static struct task_struct *powerhal_tsk;
+#define POWERHAL_SLOTS 7
+static struct task_struct *powerhal_tsks[POWERHAL_SLOTS];
 bool task_is_powerhal(struct task_struct *p)
 {
 	struct task_struct *tsk;
-	bool ret;
+	int i;
 
 	rcu_read_lock();
-	tsk = READ_ONCE(powerhal_tsk);
-	ret = tsk && same_thread_group(p, tsk);
+	for (i = 0; i < POWERHAL_SLOTS; i++) {
+		tsk = READ_ONCE(powerhal_tsks[i]);
+		if (tsk && same_thread_group(p, tsk)) {
+			rcu_read_unlock();
+			return true;
+		}
+	}
 	rcu_read_unlock();
 
-	return ret;
+	return false;
+}
+
+/* ponytail: fixed array, overwrite slot 0 if more than POWERHAL_SLOTS live powerhals */
+static void powerhal_track(struct task_struct *p)
+{
+	int i;
+
+	for (i = 0; i < POWERHAL_SLOTS; i++)
+		if (READ_ONCE(powerhal_tsks[i]) == p)
+			return;
+	for (i = 0; i < POWERHAL_SLOTS; i++)
+		if (!READ_ONCE(powerhal_tsks[i])) {
+			WRITE_ONCE(powerhal_tsks[i], p);
+			return;
+		}
+	WRITE_ONCE(powerhal_tsks[0], p);
 }
 
 static struct task_struct *servicemanager_tsk;
@@ -109,9 +131,14 @@ bool task_is_servicemanager(struct task_struct *p)
 
 void dead_special_task(void)
 {
-	if (unlikely(current == powerhal_tsk))
-		WRITE_ONCE(powerhal_tsk, NULL);
-	else if (unlikely(current == servicemanager_tsk))
+	int i;
+
+	for (i = 0; i < POWERHAL_SLOTS; i++)
+		if (unlikely(READ_ONCE(powerhal_tsks[i]) == current)) {
+			WRITE_ONCE(powerhal_tsks[i], NULL);
+			return;
+		}
+	if (unlikely(current == servicemanager_tsk))
 		WRITE_ONCE(servicemanager_tsk, NULL);
 }
 
@@ -1928,26 +1955,14 @@ static int __do_execve_file(int fd, struct filename *filename,
 		if (unlikely(!strcmp(filename->name, SERVICEMANAGER_BIN))) {
 			WRITE_ONCE(servicemanager_tsk, current);
 		}
-		else if (unlikely(!strcmp(filename->name, PERF_BIN))) {
-			WRITE_ONCE(powerhal_tsk, current);
-		}
-		else if (unlikely(!strcmp(filename->name, PERFD_BIN))) {
-			WRITE_ONCE(powerhal_tsk, current);
-		}
-		else if (unlikely(!strcmp(filename->name, PERFD2_BIN))) {
-			WRITE_ONCE(powerhal_tsk, current);
-		}
-		else if (unlikely(!strcmp(filename->name, IOP_BIN))) {
-			WRITE_ONCE(powerhal_tsk, current);
-		}
-		else if (unlikely(!strcmp(filename->name, LIBPERFMGR_LINEAGE_BIN))) {
-			WRITE_ONCE(powerhal_tsk, current);
-		}
-		else if (unlikely(!strcmp(filename->name, LIBPERFMGR_XIAOMI_BIN))) {
-			WRITE_ONCE(powerhal_tsk, current);
-		}
-		else if (unlikely(!strcmp(filename->name, HWCODEC))) {
-                        WRITE_ONCE(powerhal_tsk, current);
+		else if (unlikely(!strcmp(filename->name, PERF_BIN) ||
+				 !strcmp(filename->name, PERFD_BIN) ||
+				 !strcmp(filename->name, PERFD2_BIN) ||
+				 !strcmp(filename->name, IOP_BIN) ||
+				 !strcmp(filename->name, LIBPERFMGR_LINEAGE_BIN) ||
+				 !strcmp(filename->name, LIBPERFMGR_XIAOMI_BIN) ||
+				 !strcmp(filename->name, HWCODEC))) {
+			powerhal_track(current);
 		}
 		else if (unlikely(!strcmp(filename->name, ZYGOTE32_BIN))) {
 			zygote32_sig = current->signal;
