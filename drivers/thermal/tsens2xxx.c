@@ -187,11 +187,13 @@ static int tsens2xxx_get_temp(struct tsens_sensor *sensor, int *temp)
 			struct scm_desc desc = { 0 };
 			int scm_cnt = 0, reg_write_cnt = 0;
 
-			if (atomic_cmpxchg(&in_tsens_reinit, 0, 1)) {
+			if (atomic_read(&in_tsens_reinit)) {
 				pr_err("%s: tsens re-init is in progress\n",
 					__func__);
 				return -EAGAIN;
 			}
+
+			atomic_set(&in_tsens_reinit, 1);
 
 			if (tmdev->ops->dbg)
 				tmdev->ops->dbg(tmdev, 0,
