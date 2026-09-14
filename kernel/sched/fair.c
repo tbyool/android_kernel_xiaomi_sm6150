@@ -4785,7 +4785,7 @@ static inline int util_fits_cpu(unsigned long util,
 				unsigned long uclamp_max,
 				int cpu)
 {
-	unsigned long capacity_orig;
+	unsigned long capacity_orig, capacity_orig_thermal;
 	unsigned long capacity = capacity_of(cpu);
 	bool fits, uclamp_max_fits;
 
@@ -4822,6 +4822,7 @@ static inline int util_fits_cpu(unsigned long util,
 	 * the time.
 	 */
 	capacity_orig = capacity_orig_of(cpu);
+	capacity_orig_thermal = capacity_orig - thermal_load_avg(cpu_rq(cpu));
 
 	/*
 	 * We want to force a task to fit a cpu as implied by uclamp_max.
@@ -4896,7 +4897,7 @@ static inline int util_fits_cpu(unsigned long util,
 	 * handle the case uclamp_min > uclamp_max.
 	 */
 	uclamp_min = min(uclamp_min, uclamp_max);
-	if (fits && (util < uclamp_min) && (uclamp_min > capacity_orig))
+	if (fits && (util < uclamp_min) && (uclamp_min > capacity_orig_thermal))
 		return -1;
 
 	return fits;
@@ -10843,6 +10844,9 @@ static inline bool others_have_blocked(struct rq *rq)
 	if (cpu_util_dl(rq))
 		return true;
 
+	if (thermal_load_avg(rq))
+		return true;
+
 	if (cpu_util_irq(rq))
 		return true;
 
@@ -10904,6 +10908,7 @@ static void __update_blocked_averages(struct rq *rq)
 	curr_class = rq->curr->sched_class;
 	update_rt_rq_load_avg(rq_clock_pelt(rq), rq, curr_class == &rt_sched_class);
 	update_dl_rq_load_avg(rq_clock_pelt(rq), rq, curr_class == &dl_sched_class);
+	update_thermal_load_avg(rq_clock_thermal(rq), rq, arch_scale_thermal_pressure(cpu));
 	update_irq_load_avg(rq, 0);
 #ifdef CONFIG_NO_HZ_COMMON
 	rq->last_blocked_load_update_tick = jiffies;
@@ -11083,6 +11088,7 @@ static unsigned long scale_rt_capacity(int cpu)
 
 	used = cpu_util_rt(rq);
 	used += cpu_util_dl(rq);
+	used += thermal_load_avg(rq);
 
 	if (unlikely(used >= max))
 		return 1;
