@@ -39,7 +39,6 @@
 
 #include "sched.h"
 #include "tune.h"
-#include "mlfq.h"
 #include "walt.h"
 
 #ifdef CONFIG_FUSE_SHORTCIRCUIT
@@ -1373,248 +1372,6 @@ int sched_proc_update_handler(struct ctl_table *table, int write,
 static void clear_buddies(struct cfs_rq *cfs_rq, struct sched_entity *se);
 
 /*
- * The EEVDF request size r_i for an entity.
- *
- * With sched_feat(MLFQ) a task's request comes from the queue its
- * classification put it in, so an interactive task asks for less and a
- * CPU-bound one asks for more; see kernel/sched/mlfq.h. Group entities
- * keep taking the base slice here, because their request is overwritten with
- * the min_slice of the entities below them in enqueue_task_fair() anyway.
- *
- * A task that asked for its own request size through sched_setattr() has
- * custom_slice set and never reaches this, so MLFQ never overrides an explicit
- * request.
- */
-static inline u64 mlfq_base_slice(struct sched_entity *se)
-{
-	if (sched_feat(MLFQ) && entity_is_task(se))
-		return mlfq_queue_slice(task_of(se)->mlfq.queue);
-
-	return sysctl_sched_base_slice;
-}
-
-/*
- * Account a stretch of running time to the burst gauge. Running is the only
- * evidence that pushes a task towards the batch queue, and the gauge
- * saturates, so a task that never sleeps ends up there and stays.
- *
- * scx_mlfq climbs the gauge once per run segment, from ops.stopping(); this is
- * called per update_curr() delta instead, which is the same running time split
- * into the pieces the fair class already accounts. The climb is an addition
- * with a ceiling, so the split makes no difference at all to the result; see
- * mlfq_gauge_climb(). The refund at the other end is charged once per sleep,
- * from the wakeup, so it is not split either.
- */
-static inline void mlfq_account_runtime(struct sched_entity *se, u64 delta_exec)
-{
-	struct task_struct *p;
-
-	if (!sched_feat(MLFQ) || !entity_is_task(se))
-		return;
-
-	p = task_of(se);
-	p->mlfq.g = mlfq_gauge_climb(p->mlfq.g, delta_exec);
-	mlfq_stat_add(MLFQ_STAT_TOTAL_RUNTIME, delta_exec);
-}
-
-/*
- * A task is being switched in. scx_mlfq counted this in ops.running(), which
- * sched_ext called once per transition onto a CPU; @first is what distinguishes
- * that from set_next_task_fair() merely re-establishing cfs_rq->curr after a
- * policy or cgroup change. Group entities are walked through here too, so the
- * task check is what keeps this one count per switch-in.
- *
- * This is also where a wakeup stops being one, so it is where the mark that
- * placement reads is cleared, exactly as scx_mlfq clears MLFQ_TF_ENQ_WAKEUP in
- * the same callback.
- */
-static inline void mlfq_account_running(struct sched_entity *se, bool first)
-{
-	if (!sched_feat(MLFQ) || !first || !entity_is_task(se))
-		return;
-
-	mlfq_stat_inc(MLFQ_STAT_ON_CPU);
-	mlfq_wakeup_clear(&task_of(se)->mlfq);
-}
-
-/*
- * Issue a request, taking in whatever the task's level has had handed back to
- * it, and record where that request runs out so the task can hand back the rest
- * of it in turn.
- *
- * Every path in scx_mlfq that dispatches a task with a slice grant consumes the
- * level's pool first, and so does each of the two paths that hand out a request
- * here: placement, and update_deadline() issuing the next one after the last ran
- * out. The one path that hands out a request without consuming a pool is the
- * preemption burst, upstream and here alike; mlfq_preempt_burst() says why, and
- * the call in place_entity() is what keeps the two apart.
- *
- * A task that asked for its own request size through sched_setattr() is left
- * alone, so no reclaimed budget is ever added to an explicit request and none is
- * ever taken from one.
- *
- * The deadline is recomputed here rather than left to the caller because this
- * runs after the caller has derived one from the request it thought it was
- * issuing. Both callers run before the entity is in the tree, so neither field
- * has been observed yet; see mlfq_preempt_burst() on why that matters.
- *
- * @flags is only read for ENQUEUE_INITIAL, which is task_fork_fair() placing an
- * entity that is not going to run from this request: the enqueue that follows
- * issues the one it will run from, so consuming a pool here would empty it
- * without anything being served out of it. scx_mlfq likewise issues no grant
- * from ops.init_task(), where it only clears the field this keeps.
- */
-static void mlfq_grant_request(struct cfs_rq *cfs_rq, struct sched_entity *se,
-			       int flags)
-{
-	struct rq *rq = rq_of(cfs_rq);
-	struct mlfq_bonus *b;
-	struct task_struct *p;
-
-	if (!sched_feat(MLFQ) || se->custom_slice || !entity_is_task(se))
-		return;
-	if (flags & ENQUEUE_INITIAL)
-		return;
-
-	p = task_of(se);
-
-	b = mlfq_bonus_of(cpu_of(rq), p->mlfq.queue);
-	if (b) {
-		u64 grant = mlfq_fcbs_consume(b, se->slice, rq_clock_task(rq));
-
-		if (grant != se->slice) {
-			se->slice = grant;
-			se->deadline = se->vruntime +
-				       calc_delta_fair(se->slice, se);
-			mlfq_stat_inc(MLFQ_STAT_FCBS_GRANTS);
-		}
-	}
-
-	p->mlfq.grant_end_ns = se->sum_exec_runtime + se->slice;
-}
-
-/*
- * Hand a level back what a task did not use of the request it was granted, from
- * the deschedule that leaves the task not runnable.
- *
- * This is scx_mlfq's donation from ops.stopping(), on the same condition and
- * from the same place: put_prev_task_scx() is where sched_ext delivers that
- * callback, and @prev->on_rq is the @runnable it delivers with it. A task that
- * is still runnable has been preempted or is being moved and will come back to
- * the rest of its request, so only the other case has anything to give.
- *
- * It hangs off the deschedule rather than the dequeue because the comparison
- * needs a sum_exec_runtime that includes the run which has just ended.
- * dequeue_task_fair() is reached before dequeue_entities() has brought it up to
- * date, so measuring there would count every nanosecond of that run as unused;
- * by here the update has happened, at the dequeue in the !on_rq case and just
- * above in the other.
- *
- * The pool is the one belonging to the level the task is in now, as it is
- * upstream, which is the level it was granted from unless a demotion has since
- * moved it -- and a demotion takes a run of exhausted requests, which is a task
- * with nothing left to hand back.
- */
-static void mlfq_donate_slack(struct cfs_rq *cfs_rq, struct sched_entity *prev)
-{
-	struct rq *rq = rq_of(cfs_rq);
-	struct mlfq_bonus *b;
-	struct task_struct *p;
-	u64 slack;
-
-	if (!sched_feat(MLFQ) || prev->custom_slice || !entity_is_task(prev))
-		return;
-	if (prev->on_rq)
-		return;
-
-	p = task_of(prev);
-
-	slack = mlfq_fcbs_slack(p->mlfq.grant_end_ns, prev->sum_exec_runtime);
-	p->mlfq.grant_end_ns = 0;
-	if (!slack)
-		return;
-
-	b = mlfq_bonus_of(cpu_of(rq), p->mlfq.queue);
-	if (!b)
-		return;
-
-	mlfq_fcbs_deposit(b, slack, mlfq_queue_slice(p->mlfq.queue),
-			  rq_clock_task(rq));
-	mlfq_stat_inc(MLFQ_STAT_FCBS_SLACK_EVENTS);
-}
-
-/*
- * Wakeup preemption, from the tail of place_entity().
- *
- * scx_mlfq decides this in ops.enqueue(), where it looks at the task running on
- * the CPU the wakeup is heading for and, if the wakeup is owed the CPU, gives
- * it a short slice grant and asks sched_ext to preempt. The fair class has no
- * equivalent of that grant: what a task is given is a request, and the request
- * is what the virtual deadline is derived from, so here the two are the same
- * act. Capping the request to the burst puts the wakeup's deadline ahead of the
- * running task's, which is what makes the pick prefer it, and bounds the run it
- * gets once it has the CPU, which is what made the grant a burst.
- *
- * That leaves the preemption itself to the machinery already in
- * check_preempt_wakeup(), which is reached right after the enqueue this is part
- * of: a request shorter than the running task's is exactly what
- * sched_feat(PREEMPT_SHORT) reschedules for. So the decision is made here,
- * once, on the only path where the request may still be changed, and nothing is
- * ever preempted on a rule other than EEVDF's own.
- *
- * The comparison is only made against a running task in the same cfs_rq. Two
- * entities in different groups have no common virtual time to compare deadlines
- * in, which is why the tree does not compare them either; when they differ the
- * wakeup keeps its level's request and takes its chances in the tree, as it
- * would have without any of this.
- *
- * Returns %true when the burst was applied, which is what tells the caller not
- * to go on and issue a full request over the top of it.
- */
-static bool mlfq_preempt_burst(struct cfs_rq *cfs_rq, struct sched_entity *se)
-{
-	struct sched_entity *curr = cfs_rq->curr;
-
-	if (!sched_feat(MLFQ) || se->custom_slice || !entity_is_task(se))
-		return false;
-
-	/*
-	 * Only a wakeup. A task placed by load balancing or by a requeue is not
-	 * arriving with work to do that something else is waiting on, and one
-	 * placed as cfs_rq->curr is not arriving at all.
-	 */
-	if (!mlfq_wakeup_pending(&task_of(se)->mlfq))
-		return false;
-
-	if (!curr || curr == se || !curr->on_rq || !entity_is_task(curr))
-		return false;
-
-	if (!mlfq_preempt_owed(task_of(se), task_of(curr),
-			       entity_before(se, curr)))
-		return false;
-
-	/*
-	 * se->deadline is recomputed rather than adjusted because this runs
-	 * before __enqueue_entity(), so neither the tree's ordering nor the
-	 * min_slice and max_slice it carries have observed either field yet.
-	 *
-	 * No budget is reclaimed into a burst, and none is donated out of one. A
-	 * burst is not a level's budget, so what is left of it is not the
-	 * level's to hand out; scx_mlfq decides the same thing the same way, by
-	 * taking the preemption path instead of the one that consumes a pool and
-	 * zeroing the field the donation is measured from. The continuation is a
-	 * full request again, from the next one update_deadline() issues, and is
-	 * recorded there.
-	 */
-	se->slice = min_t(u64, se->slice, MLFQ_PREEMPT_SLICE_NS);
-	se->deadline = se->vruntime + calc_delta_fair(se->slice, se);
-	task_of(se)->mlfq.grant_end_ns = 0;
-	mlfq_stat_inc(MLFQ_STAT_PREEMPTION_KICKS);
-
-	return true;
-}
-
-/*
  * XXX: strictly: vd_i += N*r_i/w_i such that: vd_i > ve_i
  * this is probably good enough.
  */
@@ -1624,29 +1381,17 @@ static void update_deadline(struct cfs_rq *cfs_rq, struct sched_entity *se)
 		return;
 
 	/*
-	 * Reaching the deadline without sleeping is the evidence the classifier
-	 * counts towards demotion, so reclassify before the next request is
-	 * sized below. This is the flag-less ops.enqueue() of scx_mlfq, which
-	 * sched_ext delivered from put_prev_task_scx() for exactly this event.
-	 */
-	if (sched_feat(MLFQ) && entity_is_task(se))
-		mlfq_classify_runout(task_of(se),
-				     rq_clock_task(rq_of(cfs_rq)));
-
-	/*
 	 * For EEVDF the virtual time slope is determined by w_i (iow.
 	 * nice) while the request time r_i is determined by
-	 * mlfq_base_slice(), the queue's request size under
-	 * sched_feat(MLFQ) and sysctl_sched_base_slice otherwise.
+	 * sysctl_sched_base_slice.
 	 */
 	if (!se->custom_slice)
-		se->slice = mlfq_base_slice(se);
+		se->slice = sysctl_sched_base_slice;
 
 	/*
 	 * EEVDF: vd_i = ve_i + r_i / w_i
 	 */
 	se->deadline = se->vruntime + calc_delta_fair(se->slice, se);
-	mlfq_grant_request(cfs_rq, se, 0);
 	avg_vruntime(cfs_rq);
 
 	/*
@@ -1794,7 +1539,6 @@ static void update_curr(struct cfs_rq *cfs_rq)
 	schedstat_add(cfs_rq->exec_clock, delta_exec);
 
 	curr->vruntime += calc_delta_fair(delta_exec, curr);
-	mlfq_account_runtime(curr, delta_exec);
 	update_deadline(cfs_rq, curr);
 
 	if (entity_is_task(curr)) {
@@ -4995,7 +4739,7 @@ place_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, int flags)
 	s64 lag = 0;
 
 	if (!se->custom_slice)
-		se->slice = mlfq_base_slice(se);
+		se->slice = sysctl_sched_base_slice;
 	vslice = calc_delta_fair(se->slice, se);
 
 	/*
@@ -5120,16 +4864,6 @@ place_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, int flags)
 	 * EEVDF: vd_i = ve_i + r_i/w_i
 	 */
 	se->deadline = se->vruntime + vslice;
-
-	/*
-	 * The wakeup that has to preempt takes the shortened request instead of
-	 * a reclaimed one, which is how scx_mlfq splits the two: its preemption
-	 * path is a branch of its own that never consumes a level's pool, so a
-	 * pool consumed here and then capped away would hand out budget nothing
-	 * was served out of.
-	 */
-	if (!mlfq_preempt_burst(cfs_rq, se))
-		mlfq_grant_request(cfs_rq, se, flags);
 }
 
 static void check_enqueue_throttle(struct cfs_rq *cfs_rq);
@@ -5401,7 +5135,6 @@ set_next_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, bool first)
 	}
 
 	se->prev_sum_exec_runtime = se->sum_exec_runtime;
-	mlfq_account_running(se, first);
 }
 
 static int dequeue_entities(struct rq *rq, struct sched_entity *se, int flags);
@@ -5448,13 +5181,6 @@ static void put_prev_entity(struct cfs_rq *cfs_rq, struct sched_entity *prev)
 	 */
 	if (prev->on_rq)
 		update_curr(cfs_rq);
-
-	/*
-	 * The task stops here, and if it is not runnable it stops for a sleep,
-	 * which is what its level reclaims the rest of its request from. It goes
-	 * after the accounting above because that is what it measures against.
-	 */
-	mlfq_donate_slack(cfs_rq, prev);
 
 	/* throttle cfs_rqs exceeding runtime */
 	check_cfs_rq_runtime(cfs_rq);
@@ -6625,32 +6351,6 @@ enqueue_task_fair(struct rq *rq, struct task_struct *p, int flags)
 	}
 
 	/*
-	 * Reclassify before placement, so that the place_entity() reached from
-	 * either path below sizes the request from the queue this picks.
-	 *
-	 * ENQUEUE_DELAYED is a wakeup too. It arrives on its own rather than
-	 * or'd with ENQUEUE_WAKEUP because it comes from ttwu_remote(), waking
-	 * a task that blocked with lag left to pay back and so was left on the
-	 * tree instead of being dequeued. Under DELAY_DEQUEUE that is the
-	 * common way for a task that sleeps briefly to wake, which is exactly
-	 * the task the classifier is looking for, so it must not be missed.
-	 *
-	 * A task that exhausted its request is not reclassified here: that
-	 * happens in update_deadline(), and the task only reaches this point
-	 * afterwards as an ordinary requeue.
-	 */
-	if (sched_feat(MLFQ)) {
-		mlfq_classify_enqueue(p, rq_clock_task(rq),
-				      flags & (ENQUEUE_WAKEUP | ENQUEUE_DELAYED));
-		mlfq_runnable_enter(cpu_of(rq), &p->mlfq);
-	}
-
-	if (flags & ENQUEUE_DELAYED) {
-		requeue_delayed_entity(se);
-		return;
-	}
-
-	/*
 	 * If in_iowait is set, the code below may not trigger any cpufreq
 	 * utilization updates, so do it here explicitly with the IOWAIT flag
 	 * passed.
@@ -6777,29 +6477,6 @@ static int dequeue_entities(struct rq *rq, struct sched_entity *se, int flags)
 		h_nr_idle = task_has_idle_policy(p);
 		if (task_sleep || task_delayed || !se->sched_delayed)
 			h_nr_runnable = 1;
-	}
-
-	/*
-	 * Timestamp the block, so the wakeup can measure how long the task
-	 * slept: that length is what the burst gauge is refunded against, and
-	 * it decides whether the wakeup earns the interactive boost.
-	 *
-	 * A task that is already delayed is not blocking now, it blocked
-	 * earlier and is only being taken off the tree here, so its original
-	 * timestamp is the one to keep.
-	 */
-	if (sched_feat(MLFQ)) {
-		if ((flags & DEQUEUE_SLEEP) && !p->se.sched_delayed)
-			p->mlfq.last_sleep_at = rq_clock_task(rq);
-
-		/*
-		 * Every dequeue takes the task back out of the level it was
-		 * counted into, including the one that only marks it delayed: a
-		 * delayed task has blocked and is not waiting for a CPU, and the
-		 * ENQUEUE_DELAYED wakeup counts it back in. This has to happen
-		 * before dequeue_entities(), after which @p may not be touched.
-		 */
-		mlfq_runnable_exit(cpu_of(rq), &p->mlfq);
 	}
 
 	for_each_sched_entity(se) {
@@ -13759,14 +13436,6 @@ static void switched_from_fair(struct rq *rq, struct task_struct *p)
 static void switched_to_fair(struct rq *rq, struct task_struct *p)
 {
 	SCHED_WARN_ON(p->se.sched_delayed);
-
-	/*
-	 * Whatever the task did under its previous policy says nothing about
-	 * how it will behave under this one, so it starts over in the default
-	 * queue. This is the ops.enable() reset of scx_mlfq, which sched_ext
-	 * ran when a task came under its control.
-	 */
-	mlfq_reset_classification(&p->mlfq);
 
 	attach_task_cfs_rq(p);
 
