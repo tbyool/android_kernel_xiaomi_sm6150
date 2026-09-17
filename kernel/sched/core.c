@@ -45,7 +45,6 @@
 #include "../smpboot.h"
 
 #include "pelt.h"
-#include "mlfq.h"
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/sched.h>
@@ -3317,14 +3316,6 @@ static void __sched_fork(unsigned long clone_flags, struct task_struct *p)
 	p->se.vlag			= 0;
 	p->se.rel_deadline		= 0;
 	INIT_LIST_HEAD(&p->se.group_node);
-
-	/*
-	 * A new task carries no interactivity history, so it starts in the
-	 * default queue with an empty gauge and its first few stretches of
-	 * running time decide where it belongs. init_idle() comes through here
-	 * too, which is harmless: the idle task is never classified.
-	 */
-	mlfq_reset_classification(&p->mlfq);
 
 	/* A delayed task cannot be in clone(). */
 	SCHED_WARN_ON(p->se.sched_delayed);

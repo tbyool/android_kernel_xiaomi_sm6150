@@ -167,16 +167,3 @@
  */
 #define SCHED_FEAT_NI_RANDOM 1
 #define SCHED_FEAT_NI_RATE 1
-
-/*
-* Classify tasks into three multi-level feedback queues and take the EEVDF
- * request size from the queue instead of sysctl_sched_base_slice. A task the
- * classifier finds interactive gets a shorter request, hence an earlier
- * virtual deadline, and is picked sooner and more often for shorter turns; a
- * CPU-bound one gets a longer request and runs in fewer, longer turns. The
- * share each task receives still follows its weight, and the virtual deadline
- * order still bounds how long any of them waits.
- *
- * See kernel/sched/mlfq.h.
- */
-#define SCHED_FEAT_MLFQ 1
