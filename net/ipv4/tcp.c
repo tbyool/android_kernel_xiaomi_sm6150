@@ -3758,13 +3758,24 @@ void __init tcp_init(void)
 	max_wshare = min(16UL*1024*1024, limit);
 	max_rshare = min(16UL*1024*1024, limit);
 
-	sysctl_tcp_wmem[0] = SK_MEM_QUANTUM;
-	sysctl_tcp_wmem[1] = 16*1024;
-	sysctl_tcp_wmem[2] = max(64*1024, max_wshare);
+	/*
+	 * Override default TCP send/receive buffer sizes for high-throughput,
+	 * low-latency workloads on machines with large amounts of RAM and
+	 * high-bandwidth links (e.g. 10G+ NICs).
+	 *
+	 * Values based on Cloudflare's TCP tuning recommendations:
+	 * https://blog.cloudflare.com/optimizing-tcp-for-high-throughput-and-low-latency/
+	 *
+	 * net.ipv4.tcp_wmem = 4096 16384 536870912
+	 * net.ipv4.tcp_rmem = 8192 262144 536870912
+	 */
+	sysctl_tcp_wmem[0] = 4096;
+	sysctl_tcp_wmem[1] = 16384;
+	sysctl_tcp_wmem[2] = 536870912;
 
-	sysctl_tcp_rmem[0] = SK_MEM_QUANTUM;
-	sysctl_tcp_rmem[1] = 87380;
-	sysctl_tcp_rmem[2] = max(87380, max_rshare);
+	sysctl_tcp_rmem[0] = 8192;
+	sysctl_tcp_rmem[1] = 262144;
+	sysctl_tcp_rmem[2] = 536870912;
 
 	pr_info("Hash tables configured (established %u bind %u)\n",
 		tcp_hashinfo.ehash_mask + 1, tcp_hashinfo.bhash_size);
