@@ -65,15 +65,12 @@
 #include <linux/reciprocal_div.h>
 #include <net/netlink.h>
 #include <linux/version.h>
-#include "pkt_sched.h"
+#include <linux/netdevice.h>
+#include <net/pkt_sched.h>
 #include <net/pkt_cls.h>
 #include <linux/if_vlan.h>
 #include <net/tcp.h>
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 2, 0)
-#include <net/flow_keys.h>
-#else
 #include <net/flow_dissector.h>
-#endif
 #include "cobalt_compat.h"
 
 #if IS_REACHABLE(CONFIG_NF_CONNTRACK)
@@ -641,6 +638,47 @@ static bool cobalt_should_drop(struct cobalt_vars *vars,
 	return drop;
 }
 
+#if IS_ENABLED(CONFIG_NF_CONNTRACK)
+/* 4.14 native replacement for nf_ct_get_tuple_skb(): retrieve the
+ * conntrack tuple for a packet, resolving the pre-NAT tuple when no
+ * conntrack entry is attached to the skb yet.
+ */
+static bool cake_get_tuple_skb(struct nf_conntrack_tuple *dst_tuple,
+			       const struct sk_buff *skb)
+{
+	const struct nf_conntrack_tuple *src_tuple;
+	const struct nf_conntrack_tuple_hash *hash;
+	struct nf_conntrack_tuple srctuple;
+	enum ip_conntrack_info ctinfo;
+	struct nf_conn *ct;
+
+	ct = nf_ct_get(skb, &ctinfo);
+	if (ct) {
+		src_tuple = nf_ct_tuple(ct, CTINFO2DIR(ctinfo));
+		memcpy(dst_tuple, src_tuple, sizeof(*dst_tuple));
+		return true;
+	}
+
+	if (!nf_ct_get_tuplepr(skb, skb_network_offset(skb),
+			       NFPROTO_IPV4, dev_net(skb->dev),
+			       &srctuple))
+		return false;
+
+	hash = nf_conntrack_find_get(dev_net(skb->dev),
+				     &nf_ct_zone_dflt,
+				     &srctuple);
+	if (!hash)
+		return false;
+
+	ct = nf_ct_tuplehash_to_ctrack(hash);
+	src_tuple = nf_ct_tuple(ct, !hash->tuple.dst.dir);
+	memcpy(dst_tuple, src_tuple, sizeof(*dst_tuple));
+	nf_ct_put(ct);
+
+	return true;
+}
+#endif
+
 static bool cake_update_flowkeys(struct flow_keys *keys,
 				 const struct sk_buff *skb)
 {
@@ -652,7 +690,7 @@ static bool cake_update_flowkeys(struct flow_keys *keys,
 	if (skb_protocol(skb, true) != htons(ETH_P_IP))
 		return false;
 
-	if (!nf_ct_get_tuple_skb(&tuple, skb))
+	if (!cake_get_tuple_skb(&tuple, skb))
 		return false;
 
 	ip = rev ? tuple.dst.u3.ip : tuple.src.u3.ip;
@@ -665,26 +703,6 @@ static bool cake_update_flowkeys(struct flow_keys *keys,
 		keys->addrs.v4addrs.dst = ip;
 		upd = true;
 	}
-
-#if KERNEL_VERSION(4, 3, 0) > LINUX_VERSION_CODE
-		hash = nf_conntrack_find_get(dev_net(skb->dev),
-					     NF_CT_DEFAULT_ZONE,
-					     &srctuple);
-#else
-		hash = nf_conntrack_find_get(dev_net(skb->dev),
-					     &nf_ct_zone_dflt,
-					     &srctuple);
-#endif
-		if (!hash)
-			return;
-
-		rev = true;
-		ct = nf_ct_tuplehash_to_ctrack(hash);
-		tuple = nf_ct_tuple(ct, !hash->tuple.dst.dir);
-	}
-
-	keys->addrs.v4addrs.src = rev ? tuple->dst.u3.ip : tuple->src.u3.ip;
-	keys->addrs.v4addrs.dst = rev ? tuple->src.u3.ip : tuple->dst.u3.ip;
 
 	if (keys->ports.ports) {
 		__be16 port;
@@ -704,16 +722,7 @@ static bool cake_update_flowkeys(struct flow_keys *keys,
 #else
 	return false;
 #endif
-	if (rev)
-		nf_ct_put(ct);
 }
-#else
-static void cake_update_flowkeys(struct flow_keys *keys,
-				 const struct sk_buff *skb)
-{
-	/* There is nothing we can do here without CONNTRACK */
-}
-#endif
 
 /* Cake has several subtle multiple bit settings. In these cases you
  *  would be matching triple isolate mode as well.
@@ -2714,12 +2723,7 @@ static void cake_reconfigure(struct Qdisc *sch)
 				  q->buffer_config_limit));
 }
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 16, 0)
 static int cake_change(struct Qdisc *sch, struct nlattr *opt)
-#else
-static int cake_change(struct Qdisc *sch, struct nlattr *opt,
-		struct netlink_ext_ack *extack)
-#endif
 {
 	struct cake_sched_data *q = qdisc_priv(sch);
 	struct nlattr *tb[TCA_CAKE_MAX + 1];
@@ -2728,13 +2732,7 @@ static int cake_change(struct Qdisc *sch, struct nlattr *opt,
 	if (!opt)
 		return -EINVAL;
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 12, 0)
-	err = nla_parse_nested(tb, TCA_CAKE_MAX, opt, cake_policy);
-#elif LINUX_VERSION_CODE < KERNEL_VERSION(4, 16, 0)
 	err = nla_parse_nested(tb, TCA_CAKE_MAX, opt, cake_policy, NULL);
-#else
-	err = nla_parse_nested(tb, TCA_CAKE_MAX, opt, cake_policy, extack);
-#endif
 	if (err < 0)
 		return err;
 
@@ -2744,10 +2742,6 @@ static int cake_change(struct Qdisc *sch, struct nlattr *opt,
 		q->flow_mode |= CAKE_FLOW_NAT_FLAG *
 			!!nla_get_u32(tb[TCA_CAKE_NAT]);
 #else
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 16, 0)
-		NL_SET_ERR_MSG_ATTR(extack, tb[TCA_CAKE_NAT],
-				    "No conntrack support in kernel");
-#endif
 		return -EOPNOTSUPP;
 #endif
 	}
@@ -2863,12 +2857,7 @@ static void cake_destroy(struct Qdisc *sch)
 	kvfree(q->tins);
 }
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 16, 0)
 static int cake_init(struct Qdisc *sch, struct nlattr *opt)
-#else
-static int cake_init(struct Qdisc *sch, struct nlattr *opt,
-		struct netlink_ext_ack *extack)
-#endif
 {
 	struct cake_sched_data *q = qdisc_priv(sch);
 	int i, j, err;
@@ -2892,27 +2881,15 @@ static int cake_init(struct Qdisc *sch, struct nlattr *opt,
 	qdisc_watchdog_init(&q->watchdog, sch);
 
 	if (opt) {
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 16, 0)
 		err = cake_change(sch, opt);
-#else
-		err = cake_change(sch, opt, extack);
-#endif
 
 		if (err)
 			return err;
 	}
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 13, 0)
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 15, 0)
 	err = tcf_block_get(&q->block, &q->filter_list);
-#elif LINUX_VERSION_CODE < KERNEL_VERSION(4, 16, 0)
-	err = tcf_block_get(&q->block, &q->filter_list, sch);
-#else
-	err = tcf_block_get(&q->block, &q->filter_list, sch, extack);
-#endif
 	if (err)
 		return err;
-#endif
 
 	quantum_div[0] = ~0;
 	for (i = 1; i <= CAKE_QUEUES; i++)
@@ -3154,16 +3131,7 @@ static void cake_unbind(struct Qdisc *q, unsigned long cl)
 {
 }
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 13, 0)
-static struct tcf_proto __rcu **cake_find_tcf(struct Qdisc *sch, unsigned long cl)
-#else
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 16, 0)
 static struct tcf_block *cake_tcf_block(struct Qdisc *sch, unsigned long cl)
-#else
-static struct tcf_block *cake_tcf_block(struct Qdisc *sch, unsigned long cl,
-					struct netlink_ext_ack *extack)
-#endif
-#endif
 {
 	struct cake_sched_data *q = qdisc_priv(sch);
 
