@@ -97,7 +97,7 @@ static void thermal_throttle_worker(struct work_struct *work)
 	temp_avg = (temp_cpus_avg + temp_batt) / 2;
 
 	/* Bail out earlier if cool enough */
-	if (temp_avg <= 38000 || temp_batt <= 38000)
+	if (temp_avg <= 38000 || temp_batt <= 32000)
 		goto done;
 
 	/* Emergency case */
