@@ -36,10 +36,6 @@
 #include <soc/qcom/scm.h>
 
 #include "../thermal_core.h"
-#include "lmh_dbg.h"
-
-#define CREATE_TRACE_POINTS
-#include <trace/events/lmh.h>
 
 #define LIMITS_DCVSH			0x10
 #define LIMITS_PROFILE_CHANGE		0x01
@@ -64,7 +60,7 @@
 #define LIMITS_TEMP_DEFAULT		75000
 #define LIMITS_TEMP_HIGH_THRESH_MAX	120000
 #define LIMITS_LOW_THRESHOLD_OFFSET	500
-#define LIMITS_POLLING_DELAY_MS		1
+#define LIMITS_POLLING_DELAY_MS		4
 #define LIMITS_CLUSTER_REQ_OFFSET	0x704
 #define LIMITS_CLUSTER_INT_CLR_OFFSET	0x8
 #define LIMITS_CLUSTER_MIN_FREQ_OFFSET	0x3C0
@@ -190,9 +186,9 @@ static unsigned long limits_mitigation_notify(struct limits_dcvs_hw *hw)
 	if (max_cpu_ct == cpumask_weight(&hw->core_map))
 		max_limit = max_cpu_limit;
 	sched_update_cpu_freq_min_max(&hw->core_map, 0, max_limit);
+	arch_set_max_thermal_scale(&hw->core_map, max_limit);
 	pr_debug("CPU:%d max limit:%lu\n", cpumask_first(&hw->core_map),
 			max_limit);
-	trace_lmh_dcvs_freq(cpumask_first(&hw->core_map), max_limit);
 
 notify_exit:
 	hw->hw_freq_limit = max_limit;
@@ -764,6 +760,7 @@ static int limits_dcvs_probe(struct platform_device *pdev)
 		goto probe_exit;
 	}
 	limits_isens_vref_ldo_init(pdev, hw);
+	sysfs_attr_init(&hw->lmh_freq_attr.attr);
 	hw->lmh_freq_attr.attr.name = "lmh_freq_limit";
 	hw->lmh_freq_attr.show = lmh_freq_limit_show;
 	hw->lmh_freq_attr.attr.mode = 0444;
@@ -775,7 +772,6 @@ probe_exit:
 	INIT_LIST_HEAD(&hw->list);
 	list_add_tail(&hw->list, &lmh_dcvs_hw_list);
 	mutex_unlock(&lmh_dcvs_list_access);
-	lmh_debug_register(pdev);
 
 	ret = cpuhp_setup_state(CPUHP_AP_ONLINE_DYN, "lmh-dcvs/cdev:online",
 				limits_cpu_online, NULL);

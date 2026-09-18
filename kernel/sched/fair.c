@@ -119,12 +119,18 @@ unsigned int __read_mostly sysctl_sched_energy_aware = 1;
 const_debug unsigned int sysctl_sched_migration_cost	= 500000UL;
 DEFINE_PER_CPU_READ_MOSTLY(int, sched_load_boost);
 
-#ifdef CONFIG_SCHED_WALT
-unsigned int sysctl_sched_use_walt_cpu_util = 1;
-unsigned int sysctl_sched_use_walt_task_util = 1;
-__read_mostly unsigned int sysctl_sched_walt_cpu_high_irqload =
-    (10 * NSEC_PER_MSEC);
-#endif
+int sched_thermal_decay_shift;
+static int __init setup_sched_thermal_decay_shift(char *str)
+{
+	int _shift = 0;
+
+	if (kstrtoint(str, 0, &_shift))
+		pr_warn("Unable to set scheduler thermal pressure decay shift parameter\n");
+
+	sched_thermal_decay_shift = clamp(_shift, 0, 10);
+	return 1;
+}
+__setup("sched_thermal_decay_shift=", setup_sched_thermal_decay_shift);
 
 #ifdef CONFIG_SMP
 /*
@@ -4553,7 +4559,7 @@ static inline int util_fits_cpu(unsigned long util,
 				unsigned long uclamp_max,
 				int cpu)
 {
-	unsigned long capacity_orig;
+	unsigned long capacity_orig, capacity_orig_thermal;
 	unsigned long capacity = capacity_of(cpu);
 	bool fits, uclamp_max_fits;
 
@@ -4590,6 +4596,7 @@ static inline int util_fits_cpu(unsigned long util,
 	 * the time.
 	 */
 	capacity_orig = capacity_orig_of(cpu);
+	capacity_orig_thermal = capacity_orig - thermal_load_avg(cpu_rq(cpu));
 
 	/*
 	 * We want to force a task to fit a cpu as implied by uclamp_max.
@@ -4664,7 +4671,7 @@ static inline int util_fits_cpu(unsigned long util,
 	 * handle the case uclamp_min > uclamp_max.
 	 */
 	uclamp_min = min(uclamp_min, uclamp_max);
-	if (fits && (util < uclamp_min) && (uclamp_min > capacity_orig))
+	if (fits && (util < uclamp_min) && (uclamp_min > capacity_orig_thermal))
 		return -1;
 
 	return fits;
@@ -10544,6 +10551,9 @@ static inline bool others_have_blocked(struct rq *rq)
 	if (cpu_util_dl(rq))
 		return true;
 
+	if (thermal_load_avg(rq))
+		return true;
+
 	if (cpu_util_irq(rq))
 		return true;
 
@@ -10605,6 +10615,7 @@ static void __update_blocked_averages(struct rq *rq)
 	curr_class = rq->curr->sched_class;
 	update_rt_rq_load_avg(rq_clock_pelt(rq), rq, curr_class == &rt_sched_class);
 	update_dl_rq_load_avg(rq_clock_pelt(rq), rq, curr_class == &dl_sched_class);
+	update_thermal_load_avg(rq_clock_thermal(rq), rq, arch_scale_thermal_pressure(cpu));
 	update_irq_load_avg(rq, 0);
 #ifdef CONFIG_NO_HZ_COMMON
 	rq->last_blocked_load_update_tick = jiffies;
@@ -10673,12 +10684,16 @@ static inline void __update_blocked_averages(struct rq *rq)
 {
 	struct cfs_rq *cfs_rq = &rq->cfs;
 	const struct sched_class *curr_class;
+	unsigned long thermal_pressure;
+	thermal_pressure = arch_scale_thermal_pressure(cpu_of(rq));
 
 	update_cfs_rq_load_avg(cfs_rq_clock_pelt(cfs_rq), cfs_rq, true);
 
 	curr_class = rq->curr->sched_class;
 	update_rt_rq_load_avg(rq_clock_pelt(rq), rq, curr_class == &rt_sched_class);
 	update_dl_rq_load_avg(rq_clock_pelt(rq), rq, curr_class == &dl_sched_class);
+
+	update_thermal_load_avg(rq_clock_thermal(rq), rq, thermal_pressure);
 	update_irq_load_avg(rq, 0);
 #ifdef CONFIG_NO_HZ_COMMON
 	rq->last_blocked_load_update_tick = jiffies;
@@ -10780,6 +10795,7 @@ static unsigned long scale_rt_capacity(int cpu)
 
 	used = cpu_util_rt(rq);
 	used += cpu_util_dl(rq);
+	used += thermal_load_avg(rq);
 
 	if (unlikely(used >= max))
 		return 1;
