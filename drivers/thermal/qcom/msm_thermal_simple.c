@@ -13,6 +13,7 @@
 #include <linux/slab.h>
 #include <linux/thermal.h>
 #include <linux/sysfs.h>
+#include <linux/arch_topology.h>
 
 #define OF_READ_U32(node, prop, dst)						\
 ({										\
@@ -97,8 +98,13 @@ static void thermal_throttle_worker(struct work_struct *work)
 	temp_avg = (temp_cpus_avg + temp_batt) / 2;
 
 	/* Bail out earlier if cool enough */
-	if (temp_avg <= 38000 || temp_batt <= 32000)
+	if (temp_avg <= 38000 || temp_batt <= 32000) {
+		if (t->curr_zone) {
+			pr_info("throttle cleared\n");
+			t->curr_zone = NULL;
+		}
 		goto done;
+	}
 
 	/* Emergency case */
 	if (temp_cpus_avg >= 75000 || temp_batt >= 40000)
@@ -121,7 +127,10 @@ static void thermal_throttle_worker(struct work_struct *work)
 
 	/* Update thermal zone if it changed */
 	if (new_zone != old_zone) {
-		pr_info("throttling!\n");
+		if (new_zone)
+			pr_info("throttling!\n");
+		else
+			pr_info("throttle cleared\n");
 		t->curr_zone = new_zone;
 	}
 
@@ -159,12 +168,29 @@ static int cpu_notifier_cb(struct notifier_block *nb, unsigned long val,
 
 		if (target_freq < policy->max)
 			policy->max = target_freq;
+
+		if (policy->max < policy->min)
+			policy->min = policy->max;
+
+		if (policy->cpuinfo.max_freq) {
+			unsigned long max_capacity = arch_scale_cpu_capacity(policy->cpu);
+			unsigned long capacity = ((unsigned long)policy->max * max_capacity) /
+						 policy->cpuinfo.max_freq;
+
+			arch_set_thermal_pressure(policy->related_cpus,
+						  max_capacity - capacity);
+			arch_set_max_thermal_scale(policy->related_cpus, policy->max);
+		}
 	} else {
 		policy->max = policy->user_policy.max;
-	}
 
-	if (policy->max < policy->min)
-		policy->min = policy->max;
+		if (policy->max < policy->min)
+			policy->min = policy->max;
+
+		arch_set_thermal_pressure(policy->related_cpus, 0);
+		arch_set_max_thermal_scale(policy->related_cpus,
+					   policy->cpuinfo.max_freq);
+	}
 
 	return NOTIFY_OK;
 }
