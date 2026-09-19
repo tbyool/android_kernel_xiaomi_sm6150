@@ -105,7 +105,7 @@ static void thermal_throttle_worker(struct work_struct *work)
 		temp_avg = temp_cpus_avg;
 
 	/* Log the current statistics */
-	pr_info_ratelimited("temp_avg: %i, batt: %i, cpus: %i\n",
+	pr_debug("temp_avg: %i, batt: %i, cpus: %i\n",
 			temp_avg, temp_batt, temp_cpus_avg);
 
 	old_zone = t->curr_zone;
@@ -121,7 +121,7 @@ static void thermal_throttle_worker(struct work_struct *work)
 
 	/* Update thermal zone if it changed */
 	if (new_zone != old_zone) {
-		pr_info_ratelimited("throttling!\n");
+		pr_info("throttling!\n");
 		t->curr_zone = new_zone;
 	}
 
