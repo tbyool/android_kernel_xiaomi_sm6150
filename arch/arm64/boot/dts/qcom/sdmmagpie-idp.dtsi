@@ -360,7 +360,6 @@
 	qcom,hold-soc-while-full;
 	qcom,linearize-soc;
 	qcom,cl-feedback-on;
-	qcom,bass-enable;
 };
 
 &pm6150_charger {
