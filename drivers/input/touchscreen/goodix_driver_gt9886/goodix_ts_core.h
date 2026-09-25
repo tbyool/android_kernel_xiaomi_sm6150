@@ -58,6 +58,7 @@
 #define GOODIX_DRIVER_VERSION		"v1.2.0.1"
 #define GOODIX_BUS_RETRY_TIMES		3
 #define GOODIX_MAX_TOUCH			10
+#define GOODIX_MAX_PEN				1
 #define GOODIX_MAX_KEY				3
 #define GOODIX_PEN_MAX_KEY			2
 #define GOODIX_CFG_MAX_SIZE			1024
@@ -120,6 +121,7 @@ struct goodix_module {
  * @irq_flag: irq trigger type
  * @power_on_delay_us: power on delay time (us)
  * @power_off_delay_us: power off delay time (us)
+ * @swap_axis: whether swaw x y axis
  * @panel_max_id: max supported fingers
  * @panel_max_x/y/w/p: resolution and size
  * @panel_max_key: max supported keys
@@ -140,6 +142,7 @@ struct goodix_ts_board_data {
 	unsigned int power_on_delay_us;
 	unsigned int power_off_delay_us;
 
+	unsigned int swap_axis;
 	unsigned int panel_max_id; /*max touch id*/
 	unsigned int panel_max_x;
 	unsigned int panel_max_y;
@@ -152,6 +155,7 @@ struct goodix_ts_board_data {
 	/*add by lishuai*/
 	unsigned int x2x;
 	unsigned int y2y;
+	bool pen_enable;
 	unsigned int tp_key_num;
 	/*add end*/
 
@@ -236,7 +240,7 @@ enum tp_suspend_stat {
 /* coordinate package */
 struct goodix_ts_coords {
 	int id;
-	unsigned int x, y, w, area, overlapping_area;
+	unsigned int x, y, w, p, area, overlapping_area;
 };
 
 /* touch event data */
@@ -247,6 +251,9 @@ struct goodix_touch_data {
 	/* key */
 	u8 key_value;
 	bool have_key;
+	/*pen*/
+	struct goodix_ts_coords pen_coords[GOODIX_MAX_PEN];
+	bool pen_down;
 };
 
 /* request event data */
