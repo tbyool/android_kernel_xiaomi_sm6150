@@ -361,7 +361,6 @@
 	qcom,linearize-soc;
 	qcom,cl-feedback-on;
 	qcom,bass-enable;
-	qcom,cl-disable = <1>;
 };
 
 &pm6150_charger {
