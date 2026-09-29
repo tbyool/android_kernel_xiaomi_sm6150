@@ -1189,30 +1189,32 @@ SYSCALL_DEFINE1(newuname, struct new_utsname __user *, name)
 	down_read(&uts_sem);
 	memcpy(&tmp, utsname(), sizeof(tmp));
 #ifndef CONFIG_FAKE_UNAME_NONE
-	if (!strncmp(current->comm, "bpfloader", 9) ||
-		!strncmp(current->comm, "netbpfload", 10) ||
-		!strncmp(current->comm, "netd", 4) ||
-		!strncmp(current->comm, "uprobestats", 11)) {
-			if (current_uid().val == 0) {
+	if (!!current_uid().val)
+		goto skip_spoof;
+#define is_comm(str) ({								\
+	size_t len = sizeof(str) > TASK_COMM_LEN ? TASK_COMM_LEN : sizeof(str);	\
+	!__builtin_memcmp(current->comm, str, len);				\
+})
+	if (is_comm("bpfloader") || is_comm("netbpfload") || is_comm("netd") || is_comm("uprobestats") || is_comm("UprobeStatsBpfLoad")) {
 #if defined(CONFIG_FAKE_UNAME_4_19)
-				strcpy(tmp.release, "4.19.325");
+			strcpy(tmp.release, "4.19.325");
 #elif defined(CONFIG_FAKE_UNAME_5_4)
-				strcpy(tmp.release, "5.4.299");
+			strcpy(tmp.release, "5.4.299");
 #elif defined(CONFIG_FAKE_UNAME_5_10)
-				strcpy(tmp.release, "5.10.239");
+			strcpy(tmp.release, "5.10.239");
 #elif defined(CONFIG_FAKE_UNAME_5_15)
-				strcpy(tmp.release, "5.15.200");
+			strcpy(tmp.release, "5.15.200");
 #elif defined(CONFIG_FAKE_UNAME_6_1)
-				strcpy(tmp.release, "6.1.200");
+			strcpy(tmp.release, "6.1.200");
 #elif defined(CONFIG_FAKE_UNAME_6_6)
-				strcpy(tmp.release, "6.6.200");
+			strcpy(tmp.release, "6.6.200");
 #elif defined(CONFIG_FAKE_UNAME_6_12)
-				strcpy(tmp.release, "6.12.200");
+			strcpy(tmp.release, "6.12.200");
 #endif
-				pr_info("fake uname: %s/%d release=%s\n",
-					current->comm, current->pid, tmp.release);
-			}
+		pr_info("fake_uname: %s/%d release=%s\n", current->comm, current->pid, tmp.release);
 	}
+#undef is_comm
+skip_spoof:
 #endif
 	up_read(&uts_sem);
 	if (copy_to_user(name, &tmp, sizeof(tmp)))
