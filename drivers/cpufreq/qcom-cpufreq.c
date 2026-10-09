@@ -73,7 +73,6 @@ static int msm_cpufreq_target_index(struct cpufreq_policy *policy,
 	if (per_cpu(suspend_data, policy->cpu).device_suspended) {
 		pr_debug("cpufreq: cpu%d scheduling frequency change in suspend\n",
 			 policy->cpu);
-		ret = -EFAULT;
 		goto done;
 	}
 
