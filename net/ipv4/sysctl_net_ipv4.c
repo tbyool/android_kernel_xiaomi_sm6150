@@ -1168,6 +1168,13 @@ static struct ctl_table ipv4_net_table[] = {
 		.extra1		= &three,
 		.extra2		= &hundred,
 	},
+	{
+		.procname	= "tcp_collapse_max_bytes", // Cloudflare: Skip TCP collapse logic
+		.data		= &init_net.ipv4.sysctl_tcp_collapse_max_bytes,
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0644,
+		.proc_handler	= proc_douintvec_minmax,
+	},
 	{ }
 };
 
