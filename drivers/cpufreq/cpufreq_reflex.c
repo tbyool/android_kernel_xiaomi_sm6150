@@ -1102,7 +1102,7 @@ static void rfx_limits(struct cpufreq_policy *policy)
 static struct cpufreq_governor reflex_gov = {
 	.name			= "reflex",
 	.owner			= THIS_MODULE,
-	.dynamic_switching	= true,
+	.flags			= CPUFREQ_GOV_DYNAMIC_SWITCHING,
 	.init			= rfx_init,
 	.exit			= rfx_exit,
 	.start			= rfx_start,
