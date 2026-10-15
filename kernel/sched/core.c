@@ -2623,6 +2623,13 @@ static void ttwu_do_wakeup(struct rq *rq, struct task_struct *p, int wake_flags,
 			   struct rq_flags *rf)
 {
 	check_preempt_curr(rq, p, wake_flags);
+
+	if (p->in_iowait && p->iowait_started) {
+		delayacct_blkio_end(p);
+		atomic_dec(&cpu_rq(p->iowait_cpu)->nr_iowait);
+		p->iowait_started = 0;
+	}
+
 	p->state = TASK_RUNNING;
 	trace_sched_wakeup(p);
 
@@ -2667,13 +2674,7 @@ ttwu_do_activate(struct rq *rq, struct task_struct *p, int wake_flags,
 		en_flags |= ENQUEUE_RQ_SELECTED;
 	if (wake_flags & WF_MIGRATED)
 		en_flags |= ENQUEUE_MIGRATED;
-	else
 #endif
-	if (p->in_iowait) {
-		delayacct_blkio_end(p);
-		atomic_dec(&task_rq(p)->nr_iowait);
-	}
-
 	activate_task(rq, p, en_flags);
 	ttwu_do_wakeup(rq, p, wake_flags, rf);
 }
@@ -2702,6 +2703,13 @@ static int ttwu_remote(struct task_struct *p, int wake_flags)
 			 */
 			check_preempt_curr(rq, p, wake_flags);
 		}
+
+		if (p->in_iowait && p->iowait_started) {
+			delayacct_blkio_end(p);
+			atomic_dec(&cpu_rq(p->iowait_cpu)->nr_iowait);
+			p->iowait_started = 0;
+		}
+
 		p->state = TASK_RUNNING;
 		trace_sched_wakeup(p);
 		ret = 1;
@@ -3197,11 +3205,6 @@ try_to_wake_up(struct task_struct *p, unsigned int state, int wake_flags,
 
 	cpu = select_task_rq(p, p->wake_cpu, &wake_flags, sibling_count_hint);
 	if (task_cpu(p) != cpu) {
-		if (p->in_iowait) {
-			delayacct_blkio_end(p);
-			atomic_dec(&task_rq(p)->nr_iowait);
-		}
-
 		wake_flags |= WF_MIGRATED;
 		psi_ttwu_dequeue(p);
 		set_task_cpu(p, cpu);
@@ -4547,6 +4550,13 @@ static void __sched notrace __schedule(bool preempt)
 
 			if (unlikely(is_special_task_state(prev_state)))
 				flags |= DEQUEUE_SPECIAL;
+
+			if (prev->in_iowait) {
+				prev->iowait_cpu = cpu_of(rq);
+				atomic_inc(&rq->nr_iowait);
+				delayacct_blkio_start();
+				prev->iowait_started = 1;
+			}
 
 			/*
 			 *   prev_state = prev->state;    if (p->on_rq && ...)
