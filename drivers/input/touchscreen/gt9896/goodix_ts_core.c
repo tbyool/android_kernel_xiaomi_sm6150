@@ -2216,8 +2216,7 @@ int goodix_ts_msm_drm_notifier_callback(struct notifier_block *self,
 			ts_debug("notifier tp event:%d, code:%d.", event, blank);
 			ts_debug("touchpanel resume");
 			queue_work(core_data->event_wq, &core_data->resume_work);
-		} else if (event == MSM_DRM_EARLY_EVENT_BLANK && (blank == MSM_DRM_BLANK_POWERDOWN ||
-			blank == MSM_DRM_BLANK_LP1 || blank == MSM_DRM_BLANK_LP2)) {
+		} else if (event == MSM_DRM_EVENT_BLANK && blank == MSM_DRM_BLANK_POWERDOWN) {
 			ts_debug("notifier tp event:%d, code:%d.", event, blank);
 			ts_debug("touchpanel suspend by %s", blank == MSM_DRM_BLANK_POWERDOWN ? "blank" : "doze");
 			queue_work(core_data->event_wq, &core_data->suspend_work);
