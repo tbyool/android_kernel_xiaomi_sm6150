@@ -118,7 +118,8 @@ fi
 
 if [ "$clean" = true ]; then
 	rm -rf out
-	echo "Cleaned output folder"
+	make mrproper
+	echo "Cleaned up tree."
 fi
 
 echo -e "\nStarting compilation...\n"
