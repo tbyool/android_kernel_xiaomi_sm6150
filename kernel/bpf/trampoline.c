@@ -63,20 +63,11 @@ void bpf_image_ksym_del(struct bpf_ksym *ksym)
 			   PAGE_SIZE, true, ksym->name);
 }
 
-static void bpf_trampoline_ksym_add(struct bpf_trampoline *tr)
-{
-	struct bpf_ksym *ksym = &tr->cur_image->ksym;
-
-	snprintf(ksym->name, KSYM_NAME_LEN, "bpf_trampoline_%llu", tr->key);
-	bpf_image_ksym_add(tr->cur_image->image, ksym);
-}
-
 static struct bpf_trampoline *bpf_trampoline_lookup(u64 key)
 {
 	struct bpf_trampoline *tr;
 	struct hlist_head *head;
 	struct bpf_tramp_image *im;
-	void *image;
 	int i;
 
 	mutex_lock(&trampoline_mutex);

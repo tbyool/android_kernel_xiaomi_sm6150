@@ -9,6 +9,7 @@
 
 #include <linux/tracepoint.h>
 
+#undef DECLARE_HOOK
 #define DECLARE_HOOK DECLARE_TRACE
 
 #ifdef TRACE_HEADER_MULTI_READ
