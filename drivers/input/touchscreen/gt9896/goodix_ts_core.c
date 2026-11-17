@@ -1742,6 +1742,8 @@ void goodix_ts_pen_dev_remove(struct goodix_ts_core *core_data)
  * goodix_ts_esd_work - check hardware status and recovery
  *  the hardware if needed.
  */
+static void goodix_ts_release_connects(struct goodix_ts_core *core_data);
+
 static void goodix_ts_esd_work(struct work_struct *work)
 {
 	struct delayed_work *dwork = to_delayed_work(work);
@@ -1779,6 +1781,13 @@ static void goodix_ts_esd_work(struct work_struct *work)
 					&data, 1);
 		if (r < 0)
 			ts_err("failed init dynamic esd");
+
+		/* the reset dropped any contact the IC was still tracking */
+		mutex_lock(&core->ts_dev->report_mutex);
+		goodix_ts_release_connects(core);
+		core->touch_id = 0;
+		mutex_unlock(&core->ts_dev->report_mutex);
+
 		if (irq_was_enabled)
 			goodix_ts_irq_enable(core, true);
 	} else {
@@ -2066,8 +2075,16 @@ static int goodix_ts_resume(struct goodix_ts_core *core_data)
 	core_data->gesture_enabled = 1;
 #endif
 
+	/*
+	 * Quiesce the threaded IRQ before powering up, switching pins and
+	 * pulling the reset line.  With the gesture module armed the
+	 * interrupt stays enabled across suspend, so a pending touch or
+	 * gesture frame can still be in the middle of an I2C read when the
+	 * reset line goes low, which times out on the GENI controller and
+	 * stalls the resume path by a retry interval.
+	 */
+	goodix_ts_irq_enable(core_data, false);
 	goodix_ts_power_on(core_data);
-
 
 	mutex_lock(&goodix_modules.mutex);
 	if (!list_empty(&goodix_modules.head)) {
@@ -2098,14 +2115,6 @@ static int goodix_ts_resume(struct goodix_ts_core *core_data)
 #endif
 
 	atomic_set(&core_data->suspended, 0);
-	/*
-	 * Quiesce the threaded IRQ before pulling the reset line.  With the
-	 * gesture module armed the interrupt stays enabled across suspend, so
-	 * a pending touch or gesture frame can still be in the middle of an
-	 * I2C read when the reset line goes low, which times out on the GENI
-	 * controller and stalls the resume path by a retry interval.
-	 */
-	goodix_ts_irq_enable(core_data, false);
 	/* resume device */
 	if (ts_dev && ts_dev->hw_ops->resume)
 		ts_dev->hw_ops->resume(ts_dev);
