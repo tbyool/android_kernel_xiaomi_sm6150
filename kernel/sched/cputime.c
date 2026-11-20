@@ -562,7 +562,7 @@ void account_idle_ticks(unsigned long ticks)
  *
  * Assuming that rtime_i+1 >= rtime_i.
  */
-static void cputime_adjust(struct task_cputime *curr,
+void cputime_adjust(struct task_cputime *curr,
 			   struct prev_cputime *prev,
 			   u64 *ut, u64 *st)
 {
