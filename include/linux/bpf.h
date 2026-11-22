@@ -561,6 +561,15 @@ struct bpf_tramp_progs {
  *      fentry = a set of program to run before calling original function
  *      fexit = a set of program to run after original function
  */
+int arch_prepare_bpf_trampoline(void *image, void *image_end,
+				const struct btf_func_model *m, u32 flags,
+				struct bpf_tramp_progs *tprogs,
+				void *orig_call);
+/* these two functions are called from generated trampoline */
+u64 notrace __bpf_prog_enter(void);
+void notrace __bpf_prog_exit(struct bpf_prog *prog, u64 start);
+void notrace __bpf_prog_enter_sleepable(void);
+void notrace __bpf_prog_exit_sleepable(void);
 
 struct bpf_ksym {
 	unsigned long		 start;
@@ -570,28 +579,6 @@ struct bpf_ksym {
 	struct latch_tree_node	 tnode;
 	bool			 prog;
 };
-
-struct bpf_tramp_image {
-	void *image;
-	struct bpf_ksym ksym;
-	struct percpu_ref pcref;
-	void *ip_after_call;
-	void *ip_epilogue;
-	union {
-		struct rcu_head rcu;
-		struct work_struct work;
-	};
-};
-
-int arch_prepare_bpf_trampoline(struct bpf_tramp_image *tr, void *image, void *image_end,
-				const struct btf_func_model *m, u32 flags,
-				struct bpf_tramp_progs *tprogs,
-				void *orig_call);
-/* these two functions are called from generated trampoline */
-u64 notrace __bpf_prog_enter(void);
-void notrace __bpf_prog_exit(struct bpf_prog *prog, u64 start);
-void notrace __bpf_prog_enter_sleepable(void);
-void notrace __bpf_prog_exit_sleepable(void);
 
 enum bpf_tramp_prog_type {
 	BPF_TRAMP_FENTRY,
@@ -623,8 +610,9 @@ struct bpf_trampoline {
 	/* Number of attached programs. A counter per kind. */
 	int progs_cnt[BPF_TRAMP_MAX];
 	/* Executable image of trampoline */
-	struct bpf_tramp_image *cur_image;
+	void *image;
 	u64 selector;
+	struct bpf_ksym ksym;
 };
 
 struct bpf_attach_target_info {
@@ -705,8 +693,6 @@ void bpf_dispatcher_change_prog(struct bpf_dispatcher *d, struct bpf_prog *from,
 				struct bpf_prog *to);
 /* Called only from JIT-enabled code, so there's no need for stubs. */
 void *bpf_jit_alloc_exec_page(void);
-int bpf_jit_charge_modmem(u32 pages);
-void bpf_jit_uncharge_modmem(u32 pages);
 void bpf_image_ksym_add(void *data, struct bpf_ksym *ksym);
 void bpf_image_ksym_del(struct bpf_ksym *ksym);
 void bpf_ksym_add(struct bpf_ksym *ksym);
@@ -1134,43 +1120,29 @@ _out:							\
  *   2: NET_XMIT_CN       skb should be transmitted and cn
  *   3: -EPERM            skb should be dropped
  */
-/* BPF program asks to bypass CAP_NET_BIND_SERVICE in bind. */
-#define BPF_RET_BIND_NO_CAP_NET_BIND_SERVICE		(1 << 0)
-/* BPF program asks to set CN on the packet. */
-#define BPF_RET_SET_CN					(1 << 0)
-
-#define BPF_PROG_RUN_ARRAY_FLAGS(array, ctx, func, ret_flags)		\
-	({								\
-		struct bpf_prog_array_item *_item;			\
-		struct bpf_prog *_prog;					\
-		struct bpf_prog_array *_array;				\
-		u32 _ret = 1;						\
-		u32 func_ret;						\
-		migrate_disable();					\
-		rcu_read_lock();					\
-		_array = rcu_dereference(array);			\
-		_item = &_array->items[0];				\
-		while ((_prog = READ_ONCE(_item->prog))) {		\
-			if (unlikely(bpf_cgroup_storage_set(_item->cgroup_storage)))	\
-				break;					\
-			func_ret = func(_prog, ctx);			\
-			_ret &= (func_ret & 1);				\
-			*(ret_flags) |= (func_ret >> 1);			\
-			bpf_cgroup_storage_unset();			\
-			_item++;					\
-		}							\
-		rcu_read_unlock();					\
-		migrate_enable();					\
-		_ret;							\
-	 })
-
 #define BPF_PROG_CGROUP_INET_EGRESS_RUN_ARRAY(array, ctx, func)		\
 	({						\
-		u32 _flags = 0;				\
-		bool _cn;				\
-		u32 _ret;				\
-		_ret = BPF_PROG_RUN_ARRAY_FLAGS(array, ctx, func, &_flags); \
-		_cn = _flags & BPF_RET_SET_CN;		\
+		struct bpf_prog_array_item *_item;	\
+		struct bpf_prog *_prog;			\
+		struct bpf_prog_array *_array;		\
+		u32 ret;				\
+		u32 _ret = 1;				\
+		u32 _cn = 0;				\
+		migrate_disable();			\
+		rcu_read_lock();			\
+		_array = rcu_dereference(array);	\
+		_item = &_array->items[0];		\
+		while ((_prog = READ_ONCE(_item->prog))) {		\
+			if (unlikely(bpf_cgroup_storage_set(_item->cgroup_storage)))	\
+				break;			\
+			ret = func(_prog, ctx);		\
+			bpf_cgroup_storage_unset();	\
+			_ret &= (ret & 1);		\
+			_cn |= (ret & 2);		\
+			_item++;			\
+		}					\
+		rcu_read_unlock();			\
+		migrate_enable();			\
 		if (_ret)				\
 			_ret = (_cn ? NET_XMIT_CN : NET_XMIT_SUCCESS);	\
 		else					\

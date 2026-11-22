@@ -28,7 +28,6 @@
 #include <asm/cacheflush.h>
 #include <asm/debug-monitors.h>
 #include <asm/set_memory.h>
-#include <trace/hooks/memory.h>
 
 #include "bpf_jit.h"
 
@@ -736,18 +735,10 @@ emit_cond_jmp:
 		}
 		break;
 
-	case BPF_STX | BPF_ATOMIC | BPF_W:
-	case BPF_STX | BPF_ATOMIC | BPF_DW:
-		if (insn->imm != BPF_ADD) {
-			pr_err_once("unknown atomic op code %02x\n", insn->imm);
-			return -EINVAL;
-		}
-
-		/* STX XADD: lock *(u32 *)(dst + off) += src
-		 * and
-		 * STX XADD: lock *(u64 *)(dst + off) += src
-		 */
-
+	/* STX XADD: lock *(u32 *)(dst + off) += src */
+	case BPF_STX | BPF_XADD | BPF_W:
+	/* STX XADD: lock *(u64 *)(dst + off) += src */
+	case BPF_STX | BPF_XADD | BPF_DW:
 		if (!off) {
 			reg = dst;
 		} else {
@@ -1005,8 +996,6 @@ skip_init_ctx:
 			goto out_off;
 		}
 		bpf_jit_binary_lock_ro(header);
-		trace_android_vh_set_memory_ro((unsigned long)header, header->pages);
-		trace_android_vh_set_memory_x((unsigned long)header, header->pages);
 	} else {
 		jit_data->ctx = ctx;
 		jit_data->image = image_ptr;

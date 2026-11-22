@@ -37,8 +37,6 @@
 #include <linux/log2.h>
 #include <asm/unaligned.h>
 
-#include <trace/hooks/memory.h>
-
 /* Registers */
 #define BPF_R0	regs[BPF_REG_0]
 #define BPF_R1	regs[BPF_REG_1]
@@ -842,7 +840,7 @@ static int __init bpf_jit_charge_init(void)
 }
 pure_initcall(bpf_jit_charge_init);
 
-int bpf_jit_charge_modmem(u32 pages)
+static int bpf_jit_charge_modmem(u32 pages)
 {
 	if (atomic_long_add_return(pages, &bpf_jit_current) >
 	    (bpf_jit_limit >> PAGE_SHIFT)) {
@@ -855,7 +853,7 @@ int bpf_jit_charge_modmem(u32 pages)
 	return 0;
 }
 
-void bpf_jit_uncharge_modmem(u32 pages)
+static void bpf_jit_uncharge_modmem(u32 pages)
 {
 	atomic_long_sub(pages, &bpf_jit_current);
 }
@@ -923,8 +921,6 @@ void bpf_jit_binary_free(struct bpf_binary_header *hdr)
 {
 	u32 pages = hdr->pages;
 
-	trace_android_vh_set_memory_rw((unsigned long)hdr, pages);
-	trace_android_vh_set_memory_nx((unsigned long)hdr, pages);
 	bpf_jit_free_exec(hdr);
 	bpf_jit_uncharge_modmem(pages);
 }
@@ -1345,8 +1341,8 @@ EXPORT_SYMBOL_GPL(__bpf_call_base);
 	INSN_3(STX, MEM,  H),			\
 	INSN_3(STX, MEM,  W),			\
 	INSN_3(STX, MEM,  DW),			\
-	INSN_3(STX, ATOMIC, W),		\
-	INSN_3(STX, ATOMIC, DW),		\
+	INSN_3(STX, XADD, W),			\
+	INSN_3(STX, XADD, DW),			\
 	/*   Immediate based. */		\
 	INSN_3(ST, MEM, B),			\
 	INSN_3(ST, MEM, H),			\
@@ -1688,41 +1684,13 @@ out:
 	LDST(DW, u64)
 #undef LDST
 
-#define ATOMIC_ALU_OP(BOP, KOP)								case BOP:									if (BPF_SIZE(insn->code) == BPF_W)						atomic_##KOP((u32) SRC, (atomic_t *)(unsigned long) 					     (DST + insn->off));				else										atomic64_##KOP((u64) SRC, (atomic64_t *)(unsigned long) 					       (DST + insn->off));				break;								case BOP | BPF_FETCH:								if (BPF_SIZE(insn->code) == BPF_W)						SRC = (u32) atomic_fetch_##KOP(							(u32) SRC,								(atomic_t *)(unsigned long) (DST + insn->off)); 			else										SRC = (u64) atomic64_fetch_##KOP(						(u64) SRC,								(atomic64_t *)(unsigned long) (DST + insn->off)); 			break;
-
-	STX_ATOMIC_DW:
-	STX_ATOMIC_W:
-		switch (IMM) {
-		ATOMIC_ALU_OP(BPF_ADD, add)
-		ATOMIC_ALU_OP(BPF_AND, and)
-		ATOMIC_ALU_OP(BPF_OR, or)
-		ATOMIC_ALU_OP(BPF_XOR, xor)
-#undef ATOMIC_ALU_OP
-
-		case BPF_XCHG:
-			if (BPF_SIZE(insn->code) == BPF_W)
-				SRC = (u32) atomic_xchg(
-					(atomic_t *)(unsigned long) (DST + insn->off),
-					(u32) SRC);
-			else
-				SRC = (u64) atomic64_xchg(
-					(atomic64_t *)(unsigned long) (DST + insn->off),
-					(u64) SRC);
-			break;
-		case BPF_CMPXCHG:
-			if (BPF_SIZE(insn->code) == BPF_W)
-				BPF_R0 = (u32) atomic_cmpxchg(
-					(atomic_t *)(unsigned long) (DST + insn->off),
-					(u32) BPF_R0, (u32) SRC);
-			else
-				BPF_R0 = (u64) atomic64_cmpxchg(
-					(atomic64_t *)(unsigned long) (DST + insn->off),
-					(u64) BPF_R0, (u64) SRC);
-			break;
-
-		default:
-			goto default_label;
-		}
+	STX_XADD_W: /* lock xadd *(u32 *)(dst_reg + off16) += src_reg */
+		atomic_add((u32) SRC, (atomic_t *)(unsigned long)
+			   (DST + insn->off));
+		CONT;
+	STX_XADD_DW: /* lock xadd *(u64 *)(dst_reg + off16) += src_reg */
+		atomic64_add((u64) SRC, (atomic64_t *)(unsigned long)
+			     (DST + insn->off));
 		CONT;
 
 	default_label:
@@ -2410,7 +2378,6 @@ DEFINE_STATIC_KEY_FALSE(bpf_stats_enabled_key);
 EXPORT_SYMBOL(bpf_stats_enabled_key);
 
 /* All definitions of tracepoints related to BPF. */
-#undef TRACE_INCLUDE_PATH
 #define CREATE_TRACE_POINTS
 #include <linux/bpf_trace.h>
 
