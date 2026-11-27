@@ -74,14 +74,14 @@ static bool sugov_should_rate_limit(struct sugov_policy *sg_policy, u64 time)
 	return delta_ns < sg_policy->freq_update_delay_ns;
 }
 
-static inline u64 sugov_calc_freq_response_ms(struct sugov_policy *sg_policy)
+static inline u64 sugov_calc_freq_response_ms(struct cpufreq_policy *policy)
 {
-	int cpu = cpumask_first(sg_policy->policy->cpus);
+	int cpu = cpumask_first(policy->cpus);
 	unsigned long cap = arch_scale_cpu_capacity(cpu);
 	unsigned int max_freq, sec_max_freq;
 
-	max_freq = sg_policy->policy->cpuinfo.max_freq;
-	sec_max_freq = __resolve_freq(sg_policy->policy,
+	max_freq = policy->cpuinfo.max_freq;
+	sec_max_freq = __resolve_freq(policy,
 				      max_freq - 1,
 				      CPUFREQ_RELATION_H);
 
@@ -95,13 +95,39 @@ static inline u64 sugov_calc_freq_response_ms(struct sugov_policy *sg_policy)
 	return approximate_runtime(cap + 1);
 }
 
+static unsigned int sugov_get_lp_response_time_ms(void)
+{
+	struct cpufreq_policy *lp_policy;
+	int lp_cpu;
+
+	if (!cpu_lp_mask || cpumask_empty(cpu_lp_mask))
+		return 0;
+
+	lp_cpu = cpumask_first(cpu_lp_mask);
+	if (lp_cpu >= nr_cpu_ids)
+		return 0;
+
+	lp_policy = cpufreq_cpu_get_raw(lp_cpu);
+	if (!lp_policy)
+		return 0;
+
+	if (lp_policy->governor_data) {
+		struct sugov_policy *lp_sg_policy = lp_policy->governor_data;
+
+		if (lp_sg_policy->tunables)
+			return lp_sg_policy->tunables->response_time_ms;
+	}
+
+	return sugov_calc_freq_response_ms(lp_policy);
+}
+
 static inline void sugov_update_response_time_mult(struct sugov_policy *sg_policy)
 {
 	unsigned long mult;
 	int cpu;
 
 	if (unlikely(!sg_policy->freq_response_time_ms))
-		sg_policy->freq_response_time_ms = sugov_calc_freq_response_ms(sg_policy);
+		sg_policy->freq_response_time_ms = sugov_calc_freq_response_ms(sg_policy->policy);
 
 	mult = sg_policy->freq_response_time_ms * SCHED_CAPACITY_SCALE;
 	mult /=	sg_policy->tunables->response_time_ms;
@@ -111,6 +137,31 @@ static inline void sugov_update_response_time_mult(struct sugov_policy *sg_polic
 
 	for_each_cpu(cpu, sg_policy->policy->cpus)
 		per_cpu(response_time_mult, cpu) = mult;
+}
+
+static void sugov_update_big_cluster_response_time(unsigned int lp_response_time_ms)
+{
+	int cpu;
+
+	if (!cpu_lp_mask || cpumask_empty(cpu_lp_mask))
+		return;
+
+	for_each_possible_cpu(cpu) {
+		struct cpufreq_policy *p;
+
+		if (cpumask_test_cpu(cpu, cpu_lp_mask))
+			continue;
+
+		p = cpufreq_cpu_get_raw(cpu);
+		if (p && p->governor_data && p->cpu == cpu) {
+			struct sugov_policy *big_sg = p->governor_data;
+
+			if (big_sg->tunables) {
+				big_sg->tunables->response_time_ms = lp_response_time_ms * 3;
+				sugov_update_response_time_mult(big_sg);
+			}
+		}
+	}
 }
 
 /*
@@ -761,22 +812,34 @@ static ssize_t
 response_time_ms_store(struct gov_attr_set *attr_set, const char *buf, size_t count)
 {
 	struct sugov_tunables *tunables = to_sugov_tunables(attr_set);
-	struct sugov_policy *sg_policy;
+	struct sugov_policy *sg_policy = NULL, *sg;
 	unsigned int response_time_ms;
 
 	if (kstrtouint(buf, 10, &response_time_ms) || !response_time_ms)
 		return -EINVAL;
 
-	/* XXX need special handling for high values? */
-
-	tunables->response_time_ms = response_time_ms;
-
-	list_for_each_entry(sg_policy, &attr_set->policy_list, tunables_hook) {
-		if (sg_policy->tunables == tunables) {
-			sugov_update_response_time_mult(sg_policy);
+	list_for_each_entry(sg, &attr_set->policy_list, tunables_hook) {
+		if (sg->tunables == tunables) {
+			sg_policy = sg;
 			break;
 		}
 	}
+
+	if (!sg_policy)
+		return -EINVAL;
+
+	/*
+	 * Response time for the big cluster is always the value of the response
+	 * time for the little cluster multiplied by 3.
+	 */
+	if (cpu_lp_mask && !cpumask_empty(cpu_lp_mask) &&
+	    !cpumask_test_cpu(sg_policy->policy->cpu, cpu_lp_mask))
+		return -EINVAL;
+
+	tunables->response_time_ms = response_time_ms;
+	sugov_update_response_time_mult(sg_policy);
+
+	sugov_update_big_cluster_response_time(response_time_ms);
 
 	return count;
 }
@@ -953,9 +1016,16 @@ static int sugov_init(struct cpufreq_policy *policy)
 	sg_policy->tunables = tunables;
 
 	tunables->rate_limit_us = 2000;
-	tunables->response_time_ms = cpumask_test_cpu(policy->cpu, cpu_lp_mask) ?
-		sugov_calc_freq_response_ms(sg_policy) :
-		min_t(u64, 42, sugov_calc_freq_response_ms(sg_policy));
+	if (cpu_lp_mask && !cpumask_empty(cpu_lp_mask) &&
+	    cpumask_test_cpu(policy->cpu, cpu_lp_mask)) {
+		tunables->response_time_ms = sugov_calc_freq_response_ms(policy);
+		sugov_update_big_cluster_response_time(tunables->response_time_ms);
+	} else {
+		unsigned int lp_resp = sugov_get_lp_response_time_ms();
+
+		tunables->response_time_ms = lp_resp ? lp_resp * 3 :
+			sugov_calc_freq_response_ms(policy);
+	}
 	sugov_update_response_time_mult(sg_policy);
 	sugov_build_dvfs_headroom_lut(sg_policy);
 
